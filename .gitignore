@@ -49,6 +49,14 @@ managed_components/
 
 # Python virtual environment
 .venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+!.env.example
+server/secrets/
+main/apps/app_stock_selector/private_config.h
 
 # Debug / Release files
 Debug/
@@ -60,6 +68,21 @@ bin/
 obj/
 
 *.code-workspace
+
+# CPU shape-search generated market sequence store (keep README only)
+server/data/cpu_shape_search/*.npz
+server/data/cpu_shape_search/market_data_manifest.json
+server/data/cpu_shape_search/stock_sectors.json
+server/data/cpu_shape_search/*.tmp
+server/data/cpu_shape_search/market_data_config.json
+
+# Legacy/generated indexes and local test artifacts
+server/data/faiss_indexes/
+server/tests/mock/*/
+server/tests/_smoke_real_ui_out.txt
+server/acceptance_report_latest.json
+server/FINAL_REPORT.txt
+server/START_INTERACTIVE_DEMO.txt
 
 sdkconfig
 sdkconfig.old

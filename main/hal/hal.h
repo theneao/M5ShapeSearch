@@ -2,6 +2,9 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：增加 Smooth/Eco 全局界面刷新率切换接口。
  */
 #pragma once
 #include "utils/button/Button_Class.hpp"
@@ -175,6 +178,7 @@ public:
     void lvglUnlock();
     void startLvglUpdate();
     void stopLvglUpdate();
+    void setUiSmoothMode(bool smooth);
 
     /* ---------------------------------- Touch --------------------------------- */
     struct TouchPoint {

@@ -2,6 +2,15 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：首次引导页支持左侧 A 返回键退出，避免无触控/不知双键操作时卡住。
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：启动器创建即连接已保存 WiFi，联网后自动 SNTP 校时并写回 RTC。
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：WiFi 启动延后 3 秒并移出 LVGL 锁，避免开机阶段电流峰值和长临界区导致重启。
  */
 #include "app_launcher.h"
 #include <apps/common/status_bar/status_bar.h>
@@ -43,15 +52,23 @@ void AppLauncher::onLauncherOpen()
 
     _last_charge_check_tick = GetHAL().millis();
     _was_battery_charging   = GetHAL().isBatteryCharging();
+    if (!_network_started) {
+        _network_start_tick = GetHAL().millis() + 3000;
+    }
 
     _is_first_open = false;
 }
 
 void AppLauncher::onLauncherRunning()
 {
-    LvglLockGuard lock;
-
     uint32_t now = GetHAL().millis();
+    if (!_network_started && now >= _network_start_tick) {
+        // WiFi 初始化不应占用 LVGL 锁；连接和扫描本身仍是异步的。
+        _network.initialize();
+        _network_started = true;
+    }
+
+    LvglLockGuard lock;
 
     // Check pending status bar creation
     if (_pending_status_bar_create && !view::is_status_bar_created() && now >= _status_bar_create_tick) {
@@ -129,7 +146,8 @@ void AppLauncher::show_guide_page()
         GetHAL().delay(50);
 
         key_manager.update();
-        if (key_manager.getEvent() == input::KeyEvent::GoHome) {
+        if (key_manager.getEvent() == input::KeyEvent::GoHome ||
+            key_manager.getEvent() == input::KeyEvent::GoPrevious) {
             break;
         }
     }

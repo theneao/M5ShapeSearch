@@ -2,6 +2,10 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：默认时区改为中国标准时间；联网后的 SNTP 同步由网络层自动写回 RTC。
+ * 使用方式：无需在 Settings 手工设置时间，离线启动继续使用 RTC 保存的 UTC。
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
@@ -126,7 +130,7 @@ void Hal::setTimezone(std::string_view tz)
 std::string Hal::getTimezone()
 {
     Settings settings("system", false);
-    return settings.GetString("tz", "GMT0");
+    return settings.GetString("tz", "CST-8");
 }
 
 DateYmd Hal::getDateYmd()

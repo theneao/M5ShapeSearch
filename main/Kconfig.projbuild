@@ -1,0 +1,10 @@
+menu "Shape Search"
+
+config SHAPE_SERVER_URL
+    string "Shape Search server URL"
+    default "http://192.168.101.22:8000"
+    help
+        FastAPI address reachable from the watch over the local network.
+        Include the protocol and port, without a trailing slash.
+
+endmenu

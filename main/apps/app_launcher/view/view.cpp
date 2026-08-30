@@ -2,12 +2,27 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：首页 A/B 切换使用 ease-out 非线性滚动，并提供 Smooth/Eco 两种动画时长。
+ * 使用方式：Settings -> Motion 修改；下次回到首页时立即生效。
  */
 #include "view.h"
+// 修改时间：2026-08-29
+// 修改作用：首页切换使用 LVGL 原生滚动执行器，并缓存标签透明度以减少无效重绘。
+// 使用方式：按 A/B 或触屏左右滑动切换；Motion 设置会同时调整动画和全局刷新率。
+// 修改时间：2026-08-30
+// 修改作用：启动页销毁后立即以整屏缓冲提交稳定首页，避免首屏短暂残影或闪烁。
+// 使用方式：开机或返回首页时自动生效。
+// 修改时间：2026-08-30
+// 修改作用：移除页面构造期间的同步强制刷新，避免与 LVGL 刷新任务竞争导致图层残缺。
+// 修改时间：2026-08-30
+// 修改作用：首页循环副本从 5 组减为 3 组，并在首帧前直接定位中间组，减少布局负担和启动跳帧。
 #include <mooncake_log.h>
 #include <assets/assets.h>
 #include <functional>
 #include <hal/hal.h>
+#include <hal/utils/settings/settings.h>
 #include <cstdint>
 #include <vector>
 
@@ -143,6 +158,7 @@ public:
         // Update label
         _label->setText(_icon_label_texts[index]);
         _label->setPos(0, pos_y);
+        set_opacity(255);
     }
 
     void update(int scrollValue)
@@ -174,9 +190,9 @@ public:
         if (should_be_visible && distance_to_icon > (show_range - transition_zone)) {
             // Fade out as approaching edge
             float fade_ratio = 1.0f - (float)(distance_to_icon - (show_range - transition_zone)) / transition_zone;
-            _label->setOpa(255 * fade_ratio);
+            set_opacity(static_cast<lv_opa_t>(255 * fade_ratio));
         } else if (should_be_visible) {
-            _label->setOpa(255);
+            set_opacity(255);
         }
     }
 
@@ -186,15 +202,25 @@ private:
     int _current_index = 0;
     int _last_index    = 0;
     bool _is_visible   = false;
+    int _last_opacity  = -1;
 
     std::unique_ptr<Label> _label;
+
+    void set_opacity(lv_opa_t opacity)
+    {
+        if (_last_opacity == opacity) {
+            return;
+        }
+        _last_opacity = opacity;
+        _label->setOpa(opacity);
+    }
 };
 
 static std::string _tag        = "LauncherView";
 static constexpr int _icon_gap = 466;
-// Create 5 copies: [0:Backup] [1:Buffer] [2:Main] [3:Buffer] [4:Backup]
-static constexpr int _loop_copies       = 5;
-static constexpr int _center_copy_index = 2;
+// 3 组足够覆盖左右循环：[0:左备用] [1:当前] [2:右备用]。
+static constexpr int _loop_copies       = 3;
+static constexpr int _center_copy_index = 1;
 
 static int _last_clicked_icon_pos_x = -1;
 static std::unique_ptr<PageIndicator> _page_indicator;
@@ -216,6 +242,8 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     mclog::tagInfo(_tag, "init");
 
     _key_manager = std::make_unique<input::KeyManager>();
+    Settings motion_settings("ui_motion", false);
+    _smooth_motion = motion_settings.GetBool("smooth", true);
 
     /* ------------------------------ Screen setup ------------------------------ */
     ScreenActive screen;
@@ -232,6 +260,7 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _panel->addFlag(LV_OBJ_FLAG_SCROLL_ONE);
     _panel->setPaddingAll(0);
     lv_obj_set_scroll_snap_x(_panel->get(), LV_SCROLL_SNAP_CENTER);
+    lv_obj_add_event_cb(_panel->get(), &LauncherView::scroll_begin_event_cb, LV_EVENT_SCROLL_BEGIN, this);
 
     /* ---------------------------------- Icons --------------------------------- */
     int icon_x = 0;
@@ -344,25 +373,28 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     //     GetHAL().clearWarmRebootRequest();
     // }
 
-    if (_last_clicked_icon_pos_x != -1) {
-        // Just restore where they left off, it should be in a valid range
-        // mclog::tagInfo(_tag, "navigate to last clicked icon, pos x: {}", _last_clicked_icon_pos_x);
-        restore_icon_pos_x       = _last_clicked_icon_pos_x;
+    int logical_restore_index = 0;
+    if (_last_clicked_icon_pos_x != -1 && !appPorps.empty()) {
+        // 历史位置可能来自任意循环副本，恢复时统一映射到中间组。
+        logical_restore_index = (_last_clicked_icon_pos_x / _icon_gap) % appPorps.size();
+        restore_icon_pos_x = (base_offset_rounds + logical_restore_index) * _icon_gap;
         need_restore             = true;
         _last_clicked_icon_pos_x = -1;
     }
 
-    if (need_restore) {
-        _panel->scrollBy(-restore_icon_pos_x, 0, LV_ANIM_OFF);
-
-        _page_indicator->jumpTo(restore_icon_pos_x / _icon_gap);
-        _dynamic_icon_label->jumpTo(restore_icon_pos_x / _icon_gap);
-
-        _state = STATE_NORMAL;
+    if (!need_restore) {
+        restore_icon_pos_x = default_start_x;
     }
+    _panel->scrollBy(-restore_icon_pos_x, 0, LV_ANIM_OFF);
+
+    _page_indicator->jumpTo(logical_restore_index);
+    _dynamic_icon_label->jumpTo(base_offset_rounds + logical_restore_index);
+
+    _state = STATE_NORMAL;
 
     // Destory boot logo label
     GetHAL().bootLogo.reset();
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void LauncherView::update()
@@ -399,8 +431,20 @@ void LauncherView::scroll_to_nearby_icon(int direction)
     int target_index      = current_index + direction;
 
     int target_x        = target_index * _icon_gap;
-    int scroll_distance = target_x - current_scroll_x;
-    _panel->scrollBy(-scroll_distance, 0, LV_ANIM_ON);
+    // 使用 LVGL 内部 scroll_x_anim；其每帧直接移动子对象，不再重复发送
+    // SCROLL_BEGIN/SCROLL_END 事件和执行边界、吸附计算。
+    lv_obj_scroll_to_x(_panel->get(), target_x, LV_ANIM_ON);
+}
+
+void LauncherView::scroll_begin_event_cb(lv_event_t* event)
+{
+    auto* animation = static_cast<lv_anim_t*>(lv_event_get_param(event));
+    auto* self      = static_cast<LauncherView*>(lv_event_get_user_data(event));
+    if (animation == nullptr || self == nullptr) {
+        return;
+    }
+    lv_anim_set_duration(animation, self->_smooth_motion ? 300 : 120);
+    lv_anim_set_path_cb(animation, lv_anim_path_ease_out);
 }
 
 void LauncherView::handle_state_startup()
@@ -437,19 +481,12 @@ void LauncherView::handle_scroll_in_loop()
     int icons_per_set = total_icons / _loop_copies;
     int set_width_px  = icons_per_set * _icon_gap;
 
-    // Check boundaries
-    // If we are mostly in Copy 1, jump to Copy 2
-    // If we are mostly in Copy 3, jump to Copy 2
-    // Copy Index: 0 1 [2] 3 4
-
     int current_scroll_x = _panel->getScrollX();
 
-    // Define safe zone (Copy 2)
+    // 当前组固定为中间 Copy 1；进入左右备用组后瞬移回等价位置。
     int center_set_start_x = _center_copy_index * set_width_px;
-
-    // Thresholds: midpoint of Wrap sets
-    int left_trigger_limit  = 1 * set_width_px + (set_width_px / 2);  // Middle of Set 1
-    int right_trigger_limit = 3 * set_width_px + (set_width_px / 2);  // Middle of Set 3
+    int left_trigger_limit  = center_set_start_x;
+    int right_trigger_limit = center_set_start_x + set_width_px;
 
     // Wrap-around Logic
     // Only perform teleport if we are NOT in an automated scroll animation
@@ -462,7 +499,7 @@ void LauncherView::handle_scroll_in_loop()
             // Too far left (Set 1), warp right to Set 2
             // scrollBy(-val) increases scroll_x
             _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
-        } else if (current_scroll_x > right_trigger_limit) {
+        } else if (current_scroll_x >= right_trigger_limit) {
             // Too far right (Set 3), warp left to Set 2
             // scrollBy(+val) decreases scroll_x
             _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);

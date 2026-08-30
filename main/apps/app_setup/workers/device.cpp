@@ -2,11 +2,16 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：新增 Smooth/Eco 动画档位；Smooth 使用非线性过渡，Eco 缩短动画以降低持续刷新耗电。
+ * 使用方式：Settings -> Motion，触屏或 B 切换，点 OK 保存。
  */
 #include "workers.h"
 #include <assets/assets.h>
 #include <mooncake_log.h>
 #include <hal/hal.h>
+#include <hal/utils/settings/settings.h>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -228,6 +233,86 @@ private:
     bool _save_requested = false;
 };
 
+class MotionWorker::MotionConfigView {
+public:
+    explicit MotionConfigView(bool smooth) : _smooth(smooth)
+    {
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x070B14));
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _title = std::make_unique<Label>(_panel->get());
+        _title->setText("MOTION MODE");
+        _title->setTextFont(&MontserratSemiBold26);
+        _title->setTextColor(lv_color_hex(0xFFFFFF));
+        _title->align(LV_ALIGN_TOP_MID, 0, 48);
+
+        _hint = std::make_unique<Label>(_panel->get());
+        _hint->setText("SMOOTH: NON-LINEAR 320MS\nECO: SHORT 140MS, LOWER POWER");
+        _hint->setTextFont(&lv_font_montserrat_14);
+        _hint->setTextColor(lv_color_hex(0x8D9AB0));
+        _hint->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        _hint->align(LV_ALIGN_TOP_MID, 0, 98);
+
+        _mode = std::make_unique<Button>(_panel->get());
+        _mode->setSize(330, 92);
+        _mode->align(LV_ALIGN_CENTER, 0, -20);
+        _mode->setRadius(46);
+        _mode->setBorderWidth(0);
+        _mode->label().setTextFont(&lv_font_montserrat_24);
+        _mode->label().setTextColor(lv_color_hex(0xFFFFFF));
+        _mode->label().align(LV_ALIGN_CENTER, 0, 0);
+        _mode->onClick().connect([this]() { toggle(); });
+
+        _ok = std::make_unique<Button>(_panel->get());
+        _ok->setSize(300, 70);
+        _ok->align(LV_ALIGN_BOTTOM_MID, 0, -54);
+        _ok->setRadius(35);
+        _ok->setBorderWidth(0);
+        _ok->setBgColor(lv_color_hex(0x31D0AA));
+        _ok->label().setText("OK");
+        _ok->label().setTextFont(&lv_font_montserrat_20);
+        _ok->label().setTextColor(lv_color_hex(0x082E27));
+        _ok->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok->onClick().connect([this]() { _save_requested = true; });
+        render();
+    }
+
+    void toggle()
+    {
+        _smooth = !_smooth;
+        render();
+    }
+
+    bool smooth() const { return _smooth; }
+    bool consumeSaveRequested()
+    {
+        const bool value = _save_requested;
+        _save_requested = false;
+        return value;
+    }
+
+private:
+    void render()
+    {
+        _mode->setBgColor(lv_color_hex(_smooth ? 0x3C82F6 : 0x303A4D));
+        _mode->label().setText(_smooth ? "SMOOTH" : "ECO");
+    }
+
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Label> _title;
+    std::unique_ptr<Label> _hint;
+    std::unique_ptr<Button> _mode;
+    std::unique_ptr<Button> _ok;
+    bool _smooth = true;
+    bool _save_requested = false;
+};
+
 }  // namespace setup_workers
 
 BrightnessWorker::BrightnessWorker()
@@ -303,5 +388,37 @@ void ButtonWorker::update()
 }
 
 ButtonWorker::~ButtonWorker()
+{
+}
+
+MotionWorker::MotionWorker()
+{
+    Settings settings("ui_motion", false);
+    _view = std::make_unique<MotionConfigView>(settings.GetBool("smooth", true));
+}
+
+void MotionWorker::update()
+{
+    if (_view && _view->consumeSaveRequested()) {
+        Settings settings("ui_motion", true);
+        settings.SetBool("smooth", _view->smooth());
+        GetHAL().setUiSmoothMode(_view->smooth());
+        _is_done = true;
+    }
+}
+
+bool MotionWorker::handleKey(input::KeyEvent event)
+{
+    if (event != input::KeyEvent::GoNext || !_view) {
+        return false;
+    }
+    _view->toggle();
+    Settings settings("ui_motion", true);
+    settings.SetBool("smooth", _view->smooth());
+    GetHAL().setUiSmoothMode(_view->smooth());
+    return true;
+}
+
+MotionWorker::~MotionWorker()
 {
 }

@@ -2,6 +2,9 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：所有设置子页支持 A 键/左滑返回，新增网络触摸状态。
  */
 #pragma once
 #include "view/view.h"
@@ -34,4 +37,9 @@ private:
     bool _destroy_menu    = false;
     bool _need_warm_reset = false;
     int _magic_count      = 0;
+    bool _touch_active    = false;
+    int _touch_start_x    = 0;
+    int _touch_start_y    = 0;
+    int _touch_last_x     = 0;
+    int _touch_last_y     = 0;
 };

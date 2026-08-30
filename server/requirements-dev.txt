@@ -1,0 +1,6 @@
+# 创建时间：2026-08-28
+# 作用：CPU 形态搜索的本地回归与 benchmark 开发依赖。
+# 使用方式：python -m pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0,<10.0
+faiss-cpu>=1.9.0  # 仅用于旧 FAISS 兼容测试，不在主搜索链路中使用

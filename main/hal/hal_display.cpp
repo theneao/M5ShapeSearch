@@ -2,6 +2,22 @@
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
  * SPDX-License-Identifier: MIT
+ *
+ * 修改时间：2026-08-29
+ * 修改作用：修复 LVGL 缓冲区字节数错误，取消多余的整屏帧缓冲中转，并提高流畅模式刷新率。
+ * 使用方式：Settings -> Motion 选择 Smooth（约 60 FPS）或 Eco（约 30 FPS）。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：AMOLED 延迟到 LVGL 首帧完整提交后再恢复亮度；绘制缓冲扩大到整屏，消除开机页分段闪烁。
+ * 使用方式：无需设置，开机与首页重建时自动生效。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：恢复 CO5300 专用 M5GFX 帧缓冲，修复直接写屏造成的黑屏和图片破损；LVGL 使用双 234 行缓冲。
+ * 使用方式：无需设置；保留首帧熄屏提交与 Smooth/Eco 刷新档位。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：关闭分块自动上屏，等待 LVGL 一帧最后一个 flush 后统一提交，消除滑动时上下画面割裂。
+ * 使用方式：由 lv_display_flush_is_last() 自动判定帧边界，无需页面代码配合。
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
@@ -10,6 +26,7 @@
 #include <lgfx/v1/panel/Panel_AMOLED.hpp>
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
+#include <algorithm>
 #include <memory>
 
 static const std::string_view _tag = "HAL-Display";
@@ -122,9 +139,15 @@ public:
 
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
-        enableFrameBuffer(true);
+        // CO5300 的 QSPI 连续写在较大 LVGL 区域上会出现图片破损。
+        // 使用面板专用帧缓冲累积像素，再由其按偶数边界安全提交到 AMOLED。
+        if (!enableFrameBuffer(false)) {
+            mclog::tagError(_tag, "CO5300 framebuffer allocation failed");
+            return false;
+        }
 
-        _panel_instance.setBrightness(128);
+        // LVGL 首帧准备好之前保持熄屏，避免面板初始化、清屏和分块绘制过程被用户看到。
+        _panel_instance.setBrightness(0);
 
         return true;
     }
@@ -179,9 +202,8 @@ void Hal::display_init()
     //     _canvas.reset();
     // }
 
-    // Load brightness from settings
-    auto brightness = getBackLightBrightness(true);
-    setBackLightBrightness(brightness, false);
+    // 这里只读取目标亮度；lvgl_init() 完整提交启动页首帧后再点亮 AMOLED。
+    getBackLightBrightness(true);
 }
 
 LGFX_Device &Hal::getDisplay()
@@ -269,24 +291,41 @@ Hal::TouchPoint Hal::getTouchPoint()
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
 
-#define LV_BUFFER_LINE 120
+// 每块保持偶数行，CO5300 帧缓冲的偶数区域扩展不会读到尚未绘制的相邻行；整屏最多两次提交。
+static constexpr uint32_t kLvBufferLines       = 234;
+static constexpr uint32_t kSmoothRefreshPeriod = 16;
+static constexpr uint32_t kEcoRefreshPeriod    = 33;
 
-static void lvgl_tick_timer(void *arg)
+static uint32_t lvgl_tick_get_cb()
 {
-    (void)arg;
-    lv_tick_inc(10);
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
 }
 
 static void lvgl_rtos_task(void *pvParameter)
 {
     (void)pvParameter;
     while (1) {
+        uint32_t next_delay_ms = 10;
         if (_lvgl_update_enabled && pdTRUE == xSemaphoreTake(xGuiSemaphore, portMAX_DELAY)) {
-            lv_timer_handler();
+            next_delay_ms = lv_timer_handler();
             xSemaphoreGive(xGuiSemaphore);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // 动画期间按 LVGL 给出的到期时间唤醒，避免固定 10ms 延时叠加到绘制耗时上。
+        next_delay_ms = std::max<uint32_t>(1, std::min<uint32_t>(next_delay_ms, 10));
+        vTaskDelay(pdMS_TO_TICKS(next_delay_ms));
     }
+}
+
+static void lvgl_rounder_event_cb(lv_event_t *event)
+{
+    lv_area_t *area = lv_event_get_invalidated_area(event);
+    if (area == nullptr) {
+        return;
+    }
+
+    // CO5300 要求起始 x 为偶数且宽度为偶数。
+    area->x1 &= ~0x1;
+    area->x2 |= 0x1;
 }
 
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
@@ -323,13 +362,17 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
     gfx.endWrite();
 
+    // LVGL 可能把同一帧拆成多个无效区域。前面的 flush 只更新内存帧缓冲，
+    // 最后一个 flush 再一次性把累计区域提交到 CO5300，避免上下区域显示不同动画时刻。
+    if (lv_display_flush_is_last(disp)) {
+        gfx.display();
+    }
+
     lv_display_flush_ready(disp);
 }
 
 static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    M5GFX &gfx = *(M5GFX *)lv_indev_get_driver_data(indev);
-
     auto tp = GetHAL().getTouchPoint();
     if (tp.num == 0) {
         data->state = LV_INDEV_STATE_REL;
@@ -354,11 +397,29 @@ void Hal::lvgl_init()
 
     lv_display_set_driver_data(disp, _display.get());
     lv_display_set_flush_cb(disp, lvgl_flush_cb);
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
+    lv_display_add_event_cb(disp, lvgl_rounder_event_cb, LV_EVENT_INVALIDATE_AREA, nullptr);
 
-    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, _display->width() * LV_BUFFER_LINE,
-                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    // RGB565 双 234 行缓冲。partial 模式仍只重绘无效区域，整屏刷新最多拆成两个偶数边界区域。
+    static const uint32_t buffer_size = _display->width() * kLvBufferLines *
+                                        LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565);
+    static uint8_t *buf1 = static_cast<uint8_t *>(heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    static uint8_t *buf2 = static_cast<uint8_t *>(heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf1 == nullptr) {
+        mclog::tagError(_tag, "LVGL primary draw buffer allocation failed: {} bytes", buffer_size);
+        return;
+    }
+    if (buf2 == nullptr) {
+        mclog::tagWarn(_tag, "LVGL secondary draw buffer allocation failed, using single buffer");
+    }
+    lv_display_set_buffers(disp, buf1, buf2, buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    Settings motion_settings("ui_motion", false);
+    const bool smooth_motion = motion_settings.GetBool("smooth", true);
+    lv_timer_set_period(lv_display_get_refr_timer(disp),
+                        smooth_motion ? kSmoothRefreshPeriod : kEcoRefreshPeriod);
+    mclog::tagInfo(_tag, "LVGL direct flush: {} lines, {} bytes, refresh={}ms", kLvBufferLines, buffer_size,
+                   smooth_motion ? kSmoothRefreshPeriod : kEcoRefreshPeriod);
 
     lvTouchpad = lv_indev_create();
     LV_ASSERT_MALLOC(lvTouchpad);
@@ -371,21 +432,20 @@ void Hal::lvgl_init()
     lv_indev_set_read_cb(lvTouchpad, lvgl_read_cb);
     lv_indev_set_display(lvTouchpad, disp);
 
-    xGuiSemaphore                                     = xSemaphoreCreateMutex();
-    const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
-    esp_timer_handle_t periodic_timer;
-    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
-    xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 1, NULL);
+    xGuiSemaphore = xSemaphoreCreateMutex();
+    lv_tick_set_cb(lvgl_tick_get_cb);
 
+    // UI 任务尚未启动，此处可原子创建并完整提交首帧。提交完再恢复亮度，开机不会闪出中间态。
+    uitk::lvgl_cpp::ScreenActive screen;
+    screen.setBgColor(lv_color_black());
+    GetHAL().bootLogo = std::make_unique<BootLogo>();
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(disp);
+    setBackLightBrightness(getBackLightBrightness(false), false);
+
+    // UI 固定在 CPU1，避开 CPU0 上的主循环和 HTTP 请求；较高优先级减少 WiFi 活动造成的帧间抖动。
+    xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, nullptr, 3, nullptr, 1);
     startLvglUpdate();
-
-    {
-        LvglLockGuard lock;
-        uitk::lvgl_cpp::ScreenActive screen;
-        screen.setBgColor(lv_color_black());
-        GetHAL().bootLogo = std::make_unique<BootLogo>();
-    }
 }
 
 bool Hal::lvglLock()
@@ -406,4 +466,17 @@ void Hal::startLvglUpdate()
 void Hal::stopLvglUpdate()
 {
     _lvgl_update_enabled = false;
+}
+
+void Hal::setUiSmoothMode(bool smooth)
+{
+    lv_display_t *disp = lv_display_get_default();
+    if (disp == nullptr) {
+        return;
+    }
+    lv_timer_t *refresh_timer = lv_display_get_refr_timer(disp);
+    if (refresh_timer != nullptr) {
+        lv_timer_set_period(refresh_timer, smooth ? kSmoothRefreshPeriod : kEcoRefreshPeriod);
+        lv_timer_ready(refresh_timer);
+    }
 }

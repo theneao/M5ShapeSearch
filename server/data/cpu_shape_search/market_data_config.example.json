@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "data_source": "AKSHARE+BINANCE_PUBLIC",
+  "timeframes": [
+    "1d",
+    "15m"
+  ],
+  "feature_window": 60,
+  "fetch_bars": 300,
+  "adaptive_scale": true,
+  "refresh_check_seconds": 300,
+  "stock": {
+    "enabled": true,
+    "count": 300,
+    "rank_metric": "market_cap",
+    "rank_order": "top",
+    "sector": "all"
+  },
+  "crypto": {
+    "enabled": true,
+    "count": 300,
+    "rank_metric": "volume",
+    "rank_order": "top",
+    "quote_asset": "USDT",
+    "binance_request_interval_ms": 150,
+    "binance_weight_limit_per_minute": 1200,
+    "binance_concurrency": 4,
+    "binance_retry_count": 3,
+    "binance_max_retry_after_seconds": 60
+  }
+}
