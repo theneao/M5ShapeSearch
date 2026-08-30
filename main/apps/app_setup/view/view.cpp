@@ -13,6 +13,9 @@
  * 修改时间：2026-08-30
  * 修改作用：466×466 QSPI 面板不再逐帧移动全屏设置容器，改为单帧切页，消除带宽不足造成的卡顿。
  * 使用方式：菜单进入和返回立即响应；首页图标仍保留小区域动画反馈。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：设置菜单使用纵向惯性滚动并取消边缘弹性，减少圆屏边缘过度绘制和拖动迟滞。
  */
 #include "view.h"
 #include <assets/assets.h>
@@ -30,6 +33,9 @@ SelectMenuPage::SelectMenuPage(std::vector<MenuSection> sections) : _sections(st
     _pannel->setRadius(0);
     _pannel->setScrollDir(LV_DIR_VER);
     _pannel->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
+    _pannel->addFlag(LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    _pannel->removeFlag(LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_style_anim_duration(_pannel->get(), 180, LV_PART_MAIN);
 
     int cursor_y = 36;
 

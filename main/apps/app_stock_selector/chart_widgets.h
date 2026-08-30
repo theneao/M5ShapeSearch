@@ -4,6 +4,8 @@
  * 使用方式：LinePreview 用于结果卡片；KlineChart 用于单标的详情并支持拖动/缩放。
  * 修改时间：2026-08-29
  * 修改作用：K 线缩放改为比例缩放并开放可见/总根数，供详情页显示明确的缩放反馈。
+ * 修改时间：2026-08-30
+ * 修改作用：K 线横向拖动增加像素级跟手位移与松手吸附，避免逐根跳动造成卡顿感。
  */
 #pragma once
 
@@ -54,6 +56,7 @@ private:
     int _visible_count = 44;
     int _right_offset = 0;
     int _drag_x = 0;
+    int _pan_pixels = 0;
     bool _dragging = false;
 };
 

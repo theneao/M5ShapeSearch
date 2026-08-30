@@ -4,6 +4,8 @@
  * 使用方式：所有方法需在 LVGL 锁内调用；网络线程不能直接更新这些组件。
  * 修改时间：2026-08-29
  * 修改作用：详情 K 线每次载入重置为完整窗口，缩放范围扩展到 8 根并按比例变化，增强视觉区分度。
+ * 修改时间：2026-08-30
+ * 修改作用：详情图按触摸像素连续平移，跨过一根 K 线后再提交整数窗口，松手时吸附到最近一根。
  */
 #include "chart_widgets.h"
 
@@ -143,6 +145,7 @@ void KlineChart::setData(const KlineDetail& detail)
     _bars = detail.bars;
     _ohlc_exact = detail.ohlcExact;
     _right_offset = 0;
+    _pan_pixels = 0;
     _visible_count = std::min<int>(44, std::max<int>(1, _bars.size()));
     lv_obj_invalidate(_object);
 }
@@ -159,6 +162,7 @@ void KlineChart::zoomIn()
     _right_offset = std::clamp(
         _right_offset, 0, std::max(0, static_cast<int>(_bars.size()) - _visible_count)
     );
+    _pan_pixels = 0;
     lv_obj_invalidate(_object);
 }
 
@@ -174,6 +178,7 @@ void KlineChart::zoomOut()
     _right_offset = std::clamp(
         _right_offset, 0, std::max(0, static_cast<int>(_bars.size()) - _visible_count)
     );
+    _pan_pixels = 0;
     lv_obj_invalidate(_object);
 }
 
@@ -200,6 +205,21 @@ void KlineChart::eventHandler(lv_event_t* event)
 void KlineChart::handleTouch(lv_event_code_t code, lv_indev_t* input)
 {
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (_dragging && !_bars.empty()) {
+            const int slot = std::max(
+                2, static_cast<int>(lv_obj_get_width(_object)) / std::max(1, _visible_count)
+            );
+            if (std::abs(_pan_pixels) * 2 >= slot) {
+                const int step = _pan_pixels > 0 ? 1 : -1;
+                _right_offset = std::clamp(
+                    _right_offset + step,
+                    0,
+                    std::max(0, static_cast<int>(_bars.size()) - _visible_count)
+                );
+            }
+            _pan_pixels = 0;
+            lv_obj_invalidate(_object);
+        }
         _dragging = false;
         return;
     }
@@ -218,13 +238,23 @@ void KlineChart::handleTouch(lv_event_code_t code, lv_indev_t* input)
     }
     const int slot = std::max(2, static_cast<int>(lv_obj_get_width(_object)) / std::max(1, _visible_count));
     const int delta = point.x - _drag_x;
-    if (std::abs(delta) >= slot) {
-        _right_offset = std::clamp(
-            _right_offset + delta / slot,
-            0,
-            std::max(0, static_cast<int>(_bars.size()) - _visible_count)
-        );
-        _drag_x = point.x;
+    _drag_x = point.x;
+    if (delta != 0) {
+        _pan_pixels += delta;
+        const int requested_steps = _pan_pixels / slot;
+        if (requested_steps != 0) {
+            const int old_offset = _right_offset;
+            _right_offset = std::clamp(
+                _right_offset + requested_steps,
+                0,
+                std::max(0, static_cast<int>(_bars.size()) - _visible_count)
+            );
+            const int consumed_steps = _right_offset - old_offset;
+            _pan_pixels -= consumed_steps * slot;
+            if (consumed_steps != requested_steps) {
+                _pan_pixels = 0;
+            }
+        }
         lv_obj_invalidate(_object);
     }
 }
@@ -275,7 +305,7 @@ void KlineChart::draw(lv_layer_t* layer)
             for (int offset = 0; offset < period; ++offset) {
                 sum += _bars[index - offset].close;
             }
-            const float x = left + (index - start + 0.5f) * slot;
+            const float x = left + (index - start + 0.5f) * slot + _pan_pixels;
             const float y = mapY(sum / static_cast<float>(period));
             if (has_previous) {
                 drawLine(layer, previous_x, previous_y, x, y, color, 2, LV_OPA_80);
@@ -288,8 +318,8 @@ void KlineChart::draw(lv_layer_t* layer)
 
     if (!_ohlc_exact) {
         for (int index = start + 1; index < end; ++index) {
-            const float x1 = left + (index - start - 0.5f) * slot;
-            const float x2 = left + (index - start + 0.5f) * slot;
+            const float x1 = left + (index - start - 0.5f) * slot + _pan_pixels;
+            const float x2 = left + (index - start + 0.5f) * slot + _pan_pixels;
             drawLine(layer, x1, mapY(_bars[index - 1].close), x2, mapY(_bars[index].close),
                      lv_color_hex(0x3C82F6), 3);
         }
@@ -301,7 +331,9 @@ void KlineChart::draw(lv_layer_t* layer)
 
     for (int index = start; index < end; ++index) {
         const KlineBar& bar = _bars[index];
-        const int center = static_cast<int>(left + (index - start + 0.5f) * slot);
+        const int center = static_cast<int>(
+            left + (index - start + 0.5f) * slot + _pan_pixels
+        );
         const lv_color_t color = bar.close >= bar.open ? lv_color_hex(0x31D0AA) : lv_color_hex(0xFF667A);
         drawLine(layer, center, mapY(bar.high), center, mapY(bar.low), color, 1);
         const int half = std::max(1, static_cast<int>(slot * 0.32f));

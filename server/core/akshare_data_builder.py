@@ -22,6 +22,16 @@ AKShare A 股 + Binance Public Crypto 市场数据构建器。
 
 修改时间：2026-08-29
 修改作用：选池数量 0 表示全部候选，不再误清空品类缓存。
+
+修改时间：2026-08-30
+修改作用：不预设或改写服务器代理；东财请求失败时切换 AKShare 新浪快照按成交量选池，
+          日/周 K 线降级到 AKShare 腾讯源，首次建库不再永久为空。
+使用方式：部署环境按自身网络设置正常连接；程序只负责数据源切换、缓存保留和退避。
+
+修改时间：2026-08-30
+修改作用：腾讯/东财 K 线链路使用最多 4 个下载线程；避开新浪日线 py_mini_racer 的线程崩溃问题，
+          同时静默 AKShare 内部 tqdm，由统一数据进度条展示进度。
+
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -29,7 +39,11 @@ from __future__ import annotations
 # 使用方式：MarketDataService 会按周期注入 _fallback_stock_pool；首次建库且无缓存时仍明确报错。
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
+import io
+import importlib
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -54,6 +68,34 @@ STOCK_METRICS = {
 CRYPTO_METRICS = {
     "volume": "24小时成交量",
 }
+_eastmoney_unavailable_until = 0.0
+
+
+def _mark_eastmoney_unavailable(seconds: int = 300) -> None:
+    global _eastmoney_unavailable_until
+    _eastmoney_unavailable_until = max(_eastmoney_unavailable_until, time.time() + seconds)
+
+
+def _eastmoney_available() -> bool:
+    return time.time() >= _eastmoney_unavailable_until
+
+
+def _fetch_stock_daily_tx(
+    ak: Any,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+):
+    """调用 AKShare 腾讯日线并关闭其逐年份 tqdm，避免多线程输出破坏统一进度条。"""
+    tx_module = importlib.import_module("akshare.stock_feature.stock_hist_tx")
+    tx_module.get_tqdm = lambda: (lambda iterable, **_kwargs: iterable)
+    return ak.stock_zh_a_hist_tx(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq",
+        timeout=15,
+    )
 
 
 def _log(callback: Optional[LogCallback], message: str) -> None:
@@ -68,12 +110,53 @@ def _numeric(frame: Any, column: str):
 
 
 def _stock_symbol(code: str) -> str:
-    code = str(code).strip().zfill(6)
+    code = str(code).strip().lower()
+    explicit_exchange = code[:2] if code.startswith(("sh", "sz", "bj")) else ""
+    if explicit_exchange:
+        code = code[2:]
+    code = code.zfill(6)
+    if explicit_exchange:
+        return f"{explicit_exchange.upper()}:{code}"
     if code.startswith(("4", "8")):
         return f"BJ:{code}"
     if code.startswith(("5", "6", "9")):
         return f"SH:{code}"
     return f"SZ:{code}"
+
+
+def _select_stock_pool_sina(
+    count: int,
+    metric: str,
+    order: str,
+    log: Optional[LogCallback],
+    original_error: Exception,
+) -> List[Tuple[str, str]]:
+    """东财全市场快照不可用时，用 AKShare 新浪快照按真实成交量保证首次建库。"""
+    import akshare as ak
+
+    # AKShare 内部 tqdm 会破坏服务端单行进度条，因此静默其抓取进度。
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        frame = ak.stock_zh_a_spot()
+    required = {"代码", "名称", "成交量"}
+    if frame is None or not required.issubset(set(frame.columns)):
+        raise original_error
+    frame = frame.copy()
+    frame["_rank_value"] = _numeric(frame, "成交量")
+    frame = frame[np.isfinite(frame["_rank_value"].to_numpy(dtype=float, na_value=np.nan))]
+    frame = frame.sort_values("_rank_value", ascending=(order == "bottom"))
+    frame = frame.drop_duplicates(subset=["代码"])
+    if int(count) > 0:
+        frame = frame.head(int(count))
+    selected = [
+        (_stock_symbol(str(row["代码"])), str(row["名称"]))
+        for _, row in frame.iterrows()
+    ]
+    _log(
+        log,
+        f"[AKSHARE][POOL][SINA_FALLBACK] EastMoney unavailable; "
+        f"configured_metric={metric}, effective_metric=volume/{order}, selected={len(selected)}",
+    )
+    return selected
 
 
 def list_stock_sectors() -> List[str]:
@@ -100,11 +183,23 @@ def select_stock_pool(
     if metric_column is None:
         raise ValueError(f"不支持的 A 股排序指标: {metric}")
     _log(log, "[AKSHARE][POOL] 请求沪深京 A 股实时排名")
-    frame = ak.stock_zh_a_spot_em()
+    try:
+        frame = ak.stock_zh_a_spot_em()
+    except Exception as exc:
+        _mark_eastmoney_unavailable()
+        # 新浪快照没有行业字段；限定板块时不能悄悄扩大为全市场。
+        if str(sector or "all").strip().lower() != "all":
+            raise
+        return _select_stock_pool_sina(count, metric, order, log, exc)
+    global _eastmoney_unavailable_until
+    _eastmoney_unavailable_until = 0.0
     required = {"代码", "名称", metric_column}
     if frame is None or not required.issubset(set(frame.columns)):
         missing = sorted(required - set(frame.columns if frame is not None else []))
-        raise RuntimeError(f"AKShare A 股实时行情缺少字段: {missing}")
+        error = RuntimeError(f"AKShare A 股实时行情缺少字段: {missing}")
+        if str(sector or "all").strip().lower() != "all":
+            raise error
+        return _select_stock_pool_sina(count, metric, order, log, error)
 
     sector = str(sector or "all").strip()
     if sector.lower() != "all":
@@ -221,17 +316,45 @@ def fetch_stock_ohlcv(
     start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
     try:
         if canonical_timeframe in {"1d", "1w"}:
-            period = "weekly" if canonical_timeframe == "1w" else "daily"
-            frame = ak.stock_zh_a_hist(
-                symbol=code,
-                period=period,
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq",
+            if _eastmoney_available():
+                try:
+                    period = "weekly" if canonical_timeframe == "1w" else "daily"
+                    frame = ak.stock_zh_a_hist(
+                        symbol=code,
+                        period=period,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust="qfq",
+                    )
+                    result = _frame_to_ohlcv(
+                        frame,
+                        {"time": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘"},
+                        limit,
+                    )
+                    if result is not None:
+                        return result
+                except Exception:
+                    _mark_eastmoney_unavailable()
+
+            exchange = str(symbol).split(":", 1)[0].lower()
+            if exchange not in {"sh", "sz"}:
+                return None
+            frame = _fetch_stock_daily_tx(
+                ak, f"{exchange}{code}", start_date, end_date
             )
+            if canonical_timeframe == "1w" and frame is not None and len(frame):
+                frame = frame.copy()
+                frame["date"] = pd.to_datetime(frame["date"])
+                frame = (
+                    frame.set_index("date")
+                    .resample("W-FRI")
+                    .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                    .dropna()
+                    .reset_index()
+                )
             return _frame_to_ohlcv(
                 frame,
-                {"time": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘"},
+                {"time": "date", "open": "open", "high": "high", "low": "low", "close": "close"},
                 limit,
             )
 
@@ -412,11 +535,26 @@ def build_market_dataset(
     completed = 0
     stock_jobs = [job for job in jobs if job[0] == "stock"]
     crypto_jobs = [job for job in jobs if job[0] == "crypto"]
-    for category, symbol, name in stock_jobs:
-        if progress:
-            progress(completed, total, f"{timeframe} stock {completed + 1}/{total} {symbol}")
-        consume(category, symbol, name, fetch_stock_ohlcv(symbol, timeframe, fetch_bars, log))
-        completed += 1
+    if stock_jobs:
+        stock_concurrency = min(4, len(stock_jobs))
+        _log(log, f"[AKSHARE][BATCH] jobs={len(stock_jobs)}, concurrency={stock_concurrency}")
+
+        def fetch_stock(job: Tuple[str, str, str]):
+            _category, symbol, _name = job
+            return fetch_stock_ohlcv(symbol, timeframe, fetch_bars, log)
+
+        with ThreadPoolExecutor(max_workers=stock_concurrency, thread_name_prefix="akshare-kline") as executor:
+            future_map = {executor.submit(fetch_stock, job): job for job in stock_jobs}
+            for future in as_completed(future_map):
+                category, symbol, name = future_map[future]
+                completed += 1
+                if progress:
+                    progress(completed, total, f"{timeframe} stock {completed}/{total} {symbol}")
+                try:
+                    consume(category, symbol, name, future.result())
+                except Exception as exc:
+                    skipped_by_category[category] = skipped_by_category.get(category, 0) + 1
+                    _log(log, f"[AKSHARE][KLINE][ERROR] {symbol}: {type(exc).__name__}: {exc}")
 
     if crypto_jobs and binance_client is not None:
         concurrency = min(8, max(1, int(crypto_cfg.get("binance_concurrency", 4))))

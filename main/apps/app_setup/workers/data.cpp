@@ -6,6 +6,13 @@
  *
  * 修改时间：2026-08-29
  * 修改作用：补齐服务器数据参数、A 股板块和 Crypto 排序选项；数量 0 显示为 ALL，并增加明确的前/后字段触控导航。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：A 股中文板块在手表上改为英文序号显示，避免依赖大体积 CJK 字库及缺字方框。
+ * 使用方式：配置值仍向服务器保存原始板块名，屏幕仅显示 CN SECTOR 序号。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：数据设置只更新实际变化的字段标签，避免每次按键重复刷新三个文本对象。
  */
 #include "workers.h"
 
@@ -726,7 +733,16 @@ private:
             case 12: value = kCounts[_config.stockCount] == 0 ? "ALL (0)" : std::to_string(kCounts[_config.stockCount]); break;
             case 13: value = kStockMetrics[_config.stockMetric]; break;
             case 14: value = _config.stockTop ? "TOP N" : "BOTTOM N"; break;
-            case 15: value = _config.stockSector.empty() ? "all" : _config.stockSector; break;
+            case 15: {
+                auto found = std::find(_sectors.begin(), _sectors.end(), _config.stockSector);
+                const int sector_index = found == _sectors.end()
+                    ? 0 : static_cast<int>(std::distance(_sectors.begin(), found));
+                value = sector_index == 0
+                    ? "ALL SECTORS"
+                    : "CN SECTOR " + std::to_string(sector_index) + "/" +
+                        std::to_string(std::max(1, static_cast<int>(_sectors.size()) - 1));
+                break;
+            }
             case 16: value = _config.cryptoEnabled ? "ENABLED" : "DISABLED"; break;
             case 17: value = kCounts[_config.cryptoCount] == 0 ? "ALL (0)" : std::to_string(kCounts[_config.cryptoCount]); break;
             case 18: value = kCryptoMetrics[_config.cryptoMetric]; break;
@@ -739,14 +755,22 @@ private:
             case 25: value = std::to_string(kRetryAfterSeconds[_config.retryAfterSeconds]) + " SEC"; break;
             default: value = "--"; break;
         }
-        _field->setText(names[_field_index]);
-        _value_button->label().setTextFont(
-            _field_index == 15 ? &lv_font_source_han_sans_sc_16_cjk : &lv_font_montserrat_28
-        );
-        _value_button->label().setText(value.c_str());
+        const std::string field_text = names[_field_index];
+        if (field_text != _last_field_text) {
+            _field->setText(field_text.c_str());
+            _last_field_text = field_text;
+        }
+        if (value != _last_value_text) {
+            _value_button->label().setTextFont(&lv_font_montserrat_28);
+            _value_button->label().setText(value.c_str());
+            _last_value_text = value;
+        }
         char position[16] = {};
         std::snprintf(position, sizeof(position), "%d/%d", _field_index + 1, kFieldCount);
-        _position->setText(position);
+        if (_last_position_text != position) {
+            _position->setText(position);
+            _last_position_text = position;
+        }
     }
 
     std::unique_ptr<Label> makeLabel(
@@ -789,6 +813,9 @@ private:
     bool _next_field_requested = false;
     bool _apply_requested = false;
     bool _back_requested = false;
+    std::string _last_field_text;
+    std::string _last_value_text;
+    std::string _last_position_text;
     std::unique_ptr<Container> _panel;
     std::unique_ptr<Label> _title;
     std::unique_ptr<Label> _hint;

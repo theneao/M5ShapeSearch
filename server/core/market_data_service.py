@@ -41,6 +41,11 @@
 修改时间：2026-08-30
 修改作用：按需搜索不再无条件唤醒刷新线程；已运行、已排队和失败冷却分别返回明确状态及建议等待时间。
 使用方式：匹配路由调用 ensure_timeframe()，客户端读取 state/queued/retry_after_seconds 决定等待或停止。
+
+修改时间：2026-08-30
+修改作用：按需请求可只补齐实际缺失的 A 股或 Crypto 桶；首次用户请求可越过一次旧失败退避，
+          同一品类五分钟内去重，避免硬件轮询重复下载。
+使用方式：路由调用 ensure_timeframe(timeframe, categories=missing, user_requested=True)。
 """
 from __future__ import annotations
 
@@ -165,6 +170,7 @@ class MarketDataService:
     MANIFEST_FILENAME = "market_data_manifest.json"
     SECTORS_FILENAME = "stock_sectors.json"
     RETRY_BACKOFF_SECONDS = (15 * 60, 30 * 60, 60 * 60, 120 * 60)
+    ON_DEMAND_RETRY_COOLDOWN_SECONDS = 5 * 60
     TIMEFRAME_SECONDS = {
         "5m": 5 * 60,
         "15m": 15 * 60,
@@ -188,6 +194,9 @@ class MarketDataService:
         self._force_refresh = False
         self._retry_failures: Dict[str, int] = {}
         self._retry_after: Dict[str, float] = {}
+        self._pending_categories: Dict[str, set[str]] = {}
+        self._active_categories: Dict[str, set[str]] = {}
+        self._last_on_demand_attempt: Dict[str, float] = {}
         self._config = self._load_json(self.config_path, DEFAULT_CONFIG)
         self._config = normalize_config(self._config)
         self._manifest = self._load_json(self.manifest_path, {})
@@ -305,8 +314,13 @@ class MarketDataService:
         result["search_ready"] = any(value > 0 for value in result["buckets"].values())
         return result
 
-    def ensure_timeframe(self, timeframe: str) -> Dict[str, Any]:
-        """确保周期进入配置；只有确实到期时才唤醒后台，避免匹配轮询制造空刷新。"""
+    def ensure_timeframe(
+        self,
+        timeframe: str,
+        categories: Optional[List[str]] = None,
+        user_requested: bool = False,
+    ) -> Dict[str, Any]:
+        """确保缺失桶进入队列；用户按需请求可有限度越过旧失败退避。"""
         timeframe = normalize_timeframe(timeframe)
         if timeframe not in VALID_TIMEFRAMES:
             raise ValueError(f"不支持的周期: {timeframe}")
@@ -317,38 +331,66 @@ class MarketDataService:
                 self._config = normalize_config(self._config)
                 self._save_json(self.config_path, self._config)
                 added = True
-            running = self._status.get("state") == "refreshing"
             config = copy.deepcopy(self._config)
             now = time.time()
+            enabled = {
+                category for category in ("stock", "crypto")
+                if config.get(category, {}).get("enabled", True)
+            }
+            requested = enabled if categories is None else {
+                str(category) for category in categories if str(category) in enabled
+            }
+            active = set(self._active_categories.get(timeframe, set())) & requested
+            already_pending = set(self._pending_categories.get(timeframe, set())) & requested
             backoff_remaining = [
                 max(1, int(retry_at - now))
-                for category in ("stock", "crypto")
-                if config.get(category, {}).get("enabled", True)
+                for category in requested
                 for retry_at in [self._retry_after.get(f"{category}_{timeframe}", 0.0)]
                 if retry_at > now
             ]
 
-        due_categories = self._due_categories(timeframe, config, force=False)
-        # 新周期在当前刷新快照中不存在，必须保留事件供下一轮处理；其余情况仅在空闲且真正到期时排队。
-        should_queue = added or (not running and bool(due_categories))
-        if running:
+            due_categories = self._due_categories(timeframe, config, force=False) & requested
+            queue_categories = due_categories - active - already_pending
+            if user_requested:
+                # 缓存为空就是明确的用户需求；即便周期 token 尚未到期也需要补齐。
+                for category in requested - active - already_pending:
+                    key = f"{category}_{timeframe}"
+                    retry_at = self._retry_after.get(key, 0.0)
+                    last_attempt = self._last_on_demand_attempt.get(key, 0.0)
+                    may_override = (
+                        retry_at <= now
+                        or now - last_attempt >= self.ON_DEMAND_RETRY_COOLDOWN_SECONDS
+                    )
+                    if may_override:
+                        queue_categories.add(category)
+                        self._last_on_demand_attempt[key] = now
+            if added and not queue_categories and not active and not already_pending:
+                queue_categories.update(requested)
+            if queue_categories:
+                self._pending_categories.setdefault(timeframe, set()).update(queue_categories)
+
+            pending = already_pending | queue_categories
+            running = self._status.get("state") == "refreshing"
+
+        if active:
             state = "refreshing"
-            message = f"{timeframe} 数据正在构建"
+            message = f"{timeframe} data is downloading"
             retry_after_seconds = 15
-        elif should_queue:
+        elif pending:
             state = "refresh_queued"
-            message = f"{timeframe} 数据缺失，已在后台排队建库"
+            message = f"{timeframe} missing market data queued for download"
             retry_after_seconds = 15
         elif backoff_remaining:
             state = "retry_backoff"
             retry_after_seconds = max(backoff_remaining)
-            message = f"行情源暂时不可用，约 {retry_after_seconds} 秒后自动重试"
+            message = f"Market source unavailable; retry in about {retry_after_seconds}s"
         else:
             state = "waiting_period"
             retry_after_seconds = self.TIMEFRAME_SECONDS.get(timeframe, 300)
-            message = f"{timeframe} 尚无可搜索缓存，将按该 K 线周期自动检查"
+            message = f"No searchable {timeframe} cache; waiting for next market interval"
 
-        if should_queue:
+        should_wake = bool(queue_categories)
+        if should_wake:
             with self._lock:
                 if not running:
                     self._status["state"] = "refresh_queued"
@@ -356,12 +398,13 @@ class MarketDataService:
             self._refresh_event.set()
             self._append_log(
                 f"[ON_DEMAND][QUEUE] timeframe={timeframe}, added={added}, "
-                f"categories={sorted(due_categories)}"
+                f"categories={sorted(queue_categories)}"
             )
         return {
             "timeframe": timeframe,
             "added": added,
-            "queued": should_queue,
+            "queued": bool(pending),
+            "requested_categories": sorted(requested),
             "state": state,
             "message": message,
             "retry_after_seconds": retry_after_seconds,
@@ -527,11 +570,19 @@ class MarketDataService:
         last_console_percent = -1
         try:
             for tf_index, timeframe in enumerate(timeframes):
-                due_categories = self._due_categories(timeframe, config, force=force)
+                with self._lock:
+                    pending_categories = set(self._pending_categories.pop(timeframe, set()))
+                # 用户单选市场触发的按需任务只处理缺失品类；手动 force 刷新仍处理全部启用品类。
+                due_categories = (
+                    self._due_categories(timeframe, config, force=force)
+                    if force or not pending_categories
+                    else pending_categories
+                )
                 if not due_categories:
                     continue
                 with self._lock:
                     self._status["current_timeframe"] = timeframe
+                    self._active_categories[timeframe] = set(due_categories)
                 self._append_log(
                     f"[REFRESH][DUE] {timeframe} categories={sorted(due_categories)}"
                 )
@@ -645,6 +696,8 @@ class MarketDataService:
                         f"[REFRESH][INCOMPLETE] {timeframe} categories={sorted(incomplete)}, "
                         f"details={failures}, retry={retry_summary}"
                     )
+                with self._lock:
+                    self._active_categories.pop(timeframe, None)
 
             final_message = (
                 "数据刷新完成" if successful_category_tokens else
@@ -710,6 +763,9 @@ class MarketDataService:
                     "last_refresh_finished": int(time.time()),
                     "current_timeframe": None,
                 })
+        finally:
+            with self._lock:
+                self._active_categories.clear()
 
 
 __all__ = [

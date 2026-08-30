@@ -27,6 +27,10 @@
 
 修改时间：2026-08-30
 修改作用：all 模式允许使用已就绪品类立即匹配；单个数据源异常时返回部分结果并标记缺失品类。
+
+修改时间：2026-08-30
+修改作用：单选 A 股缺失时只排队下载 A 股桶，并允许用户请求有限度越过旧失败退避。
+使用方式：匹配请求中的 missing_categories 会原样传给市场数据服务。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -144,7 +148,9 @@ def api_shape_match(req: ShapeMatchRequest, request: Request):
     if not available:
         if market_data_service is None:
             raise HTTPException(503, "市场数据服务尚未初始化")
-        queued = market_data_service.ensure_timeframe(timeframe)
+        queued = market_data_service.ensure_timeframe(
+            timeframe, categories=missing_categories, user_requested=True
+        )
         detail = market_data_service.status()
         if queued.get("state") == "retry_backoff":
             return JSONResponse(
@@ -170,7 +176,7 @@ def api_shape_match(req: ShapeMatchRequest, request: Request):
                     "category": req.category,
                     "missing_categories": missing_categories,
                     "progress": detail.get("progress", 0.0),
-                    "message": detail.get("message", ""),
+                    "server_status_message": detail.get("message", ""),
                     "status_endpoint": "/api/v1/market-data/status",
                 },
             },
@@ -178,7 +184,9 @@ def api_shape_match(req: ShapeMatchRequest, request: Request):
 
     if partial_missing_categories and market_data_service is not None:
         # 非阻塞补齐缺失品类；失败冷却时 ensure_timeframe 不会再次唤醒刷新线程。
-        market_data_service.ensure_timeframe(timeframe)
+        market_data_service.ensure_timeframe(
+            timeframe, categories=partial_missing_categories, user_requested=True
+        )
 
     # Query 预处理、NCC 召回和 ShapeDTW 精排由同一 CPU 引擎完成。
     try:

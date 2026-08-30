@@ -21,6 +21,14 @@
  * 修改时间：2026-08-30
  * 修改作用：移除 466×466 页面根节点逐帧位移，内部页面改为一次提交，避免 QSPI 每帧传输约 434KB。
  * 使用方式：绘制、结果、详情与返回均立即切页；局部扫描和提示动画不受影响。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：服务端中文或其他未内置字形的动态错误统一转换为英文提示，避免 AMOLED 显示方框。
+ * 使用方式：showError() 自动检查 UTF-8 文本，静态英文提示不受影响。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：Top10 列表启用纵向惯性滚动并关闭边缘橡皮筋，降低圆屏边界大面积反复重绘。
+ * 使用方式：结果页上下拖动后可自然减速，点击卡片仍进入 K 线详情。
  */
 #include "view.h"
 // 修改时间：2026-08-29
@@ -251,6 +259,9 @@ void StockSelectorView::createResultsPage(bool animate)
     lv_obj_set_style_pad_bottom(list, 12, LV_PART_MAIN);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_style_anim_duration(list, 180, LV_PART_MAIN);
 
     for (std::size_t index = 0; index < _results.size(); ++index) {
         const MatchResult& result = _results[index];
@@ -499,6 +510,9 @@ void StockSelectorView::setBusy(bool busy, const char* text)
 void StockSelectorView::showError(const std::string& message)
 {
     setBusy(false);
+    const std::string display = asciiOrFallback(
+        message, "SERVER DATA ERROR; CHECK NETWORK OR DATA STATUS"
+    );
     if (_toast != nullptr) {
         lv_obj_delete(_toast);
     }
@@ -507,7 +521,7 @@ void StockSelectorView::showError(const std::string& message)
     lv_obj_align(_toast, LV_ALIGN_BOTTOM_MID, 0, -32);
     baseObject(_toast, 0x6C2631, 24);
     lv_obj_set_style_bg_opa(_toast, LV_OPA_90, LV_PART_MAIN);
-    lv_obj_t* label = createLabel(_toast, message.c_str(), &lv_font_montserrat_14, kText,
+    lv_obj_t* label = createLabel(_toast, display.c_str(), &lv_font_montserrat_14, kText,
                                   LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_width(label, 206);
     lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);

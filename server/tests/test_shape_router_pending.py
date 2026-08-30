@@ -14,6 +14,9 @@
 
 修改时间：2026-08-30
 修改作用：验证 all 模式在 A 股缺失时仍立即使用已就绪 Crypto 数据执行匹配。
+
+修改时间：2026-08-30
+修改作用：验证路由把实际缺失品类传给按需下载服务，单选 A 股不会误排队 Crypto。
 """
 from __future__ import annotations
 
@@ -41,9 +44,14 @@ class _Service:
     def get_config(self):
         return {"stock": {"enabled": True}, "crypto": {"enabled": True}}
 
-    def ensure_timeframe(self, timeframe):
-        self.queued.append(timeframe)
-        return {"timeframe": timeframe, "added": True, "state": "refresh_queued"}
+    def ensure_timeframe(self, timeframe, categories=None, user_requested=False):
+        self.queued.append((timeframe, categories, user_requested))
+        return {
+            "timeframe": timeframe,
+            "added": True,
+            "state": "refresh_queued",
+            "message": f"{timeframe} market data queued",
+        }
 
     def status(self):
         return {"state": "refresh_queued", "message": "后台建库", "progress": 0.1}
@@ -66,7 +74,7 @@ def test_all_category_waits_when_no_enabled_category_is_ready(monkeypatch):
     assert payload["code"] == 1001
     assert payload["msg"] == "DATA_BUILDING"
     assert payload["data"]["missing_categories"] == ["stock", "crypto"]
-    assert service.queued == ["15m"]
+    assert service.queued == [("15m", ["stock", "crypto"], True)]
 
 
 def test_futures_category_is_rejected():
@@ -80,7 +88,7 @@ def test_futures_category_is_rejected():
 
 def test_backoff_returns_data_unavailable_immediately(monkeypatch):
     class BackoffService(_Service):
-        def ensure_timeframe(self, timeframe):
+        def ensure_timeframe(self, timeframe, categories=None, user_requested=False):
             return {
                 "timeframe": timeframe,
                 "added": False,
@@ -121,8 +129,8 @@ def test_all_category_searches_ready_market_when_other_market_is_missing(monkeyp
             return [], 0
 
     class PartialService(_Service):
-        def ensure_timeframe(self, timeframe):
-            self.queued.append(timeframe)
+        def ensure_timeframe(self, timeframe, categories=None, user_requested=False):
+            self.queued.append((timeframe, categories, user_requested))
             return {
                 "timeframe": timeframe,
                 "queued": False,
@@ -146,4 +154,22 @@ def test_all_category_searches_ready_market_when_other_market_is_missing(monkeyp
     assert manager.searched is True
     assert response.data["debug"]["partial"] is True
     assert response.data["debug"]["missing_categories"] == ["stock"]
-    assert service.queued == ["1d"]
+    assert service.queued == [("1d", ["stock"], True)]
+
+
+def test_stock_only_request_queues_only_stock(monkeypatch):
+    service = _Service()
+    monkeypatch.setattr(shape_router, "index_manager", _Manager({"stock_1d": 0, "crypto_1d": 300}))
+    monkeypatch.setattr(shape_router, "market_data_service", service)
+    request = shape_router.ShapeMatchRequest(
+        points=[(0.0, 0.2), (0.5, 0.8), (1.0, 0.3)],
+        category="stock",
+        timeframe="1d",
+    )
+
+    response = shape_router.api_shape_match(request, None)
+    payload = json.loads(response.body)
+
+    assert response.status_code == 202
+    assert payload["data"]["message"].isascii()
+    assert service.queued == [("1d", ["stock"], True)]

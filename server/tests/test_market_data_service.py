@@ -20,6 +20,9 @@
 
 修改时间：2026-08-30
 修改作用：验证匹配轮询在失败冷却中不会重复唤醒刷新线程，并返回建议等待时间。
+
+修改时间：2026-08-30
+修改作用：验证用户按需请求可越过一次旧退避、只下载指定缺失品类，并在五分钟内去重。
 """
 from __future__ import annotations
 
@@ -216,6 +219,51 @@ def test_ensure_timeframe_does_not_queue_during_backoff(tmp_path, monkeypatch):
     assert result["retry_after_seconds"] >= 890
     assert not service._refresh_event.is_set()
     assert not any("[ON_DEMAND][QUEUE]" in line for line in service.status()["logs"])
+
+
+def test_user_requested_stock_overrides_backoff_once_and_is_deduplicated(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_AUTO_REFRESH", "0")
+    now = [1000.0]
+    monkeypatch.setattr("core.market_data_service.time.time", lambda: now[0])
+    service = MarketDataService(CpuShapeSearchManager(str(tmp_path)))
+    service._schedule_retry_backoff("stock_1d")
+    service._schedule_retry_backoff("crypto_1d")
+
+    first = service.ensure_timeframe("1d", categories=["stock"], user_requested=True)
+    second = service.ensure_timeframe("1d", categories=["stock"], user_requested=True)
+
+    assert first["state"] == "refresh_queued"
+    assert first["requested_categories"] == ["stock"]
+    assert second["state"] == "refresh_queued"
+    assert service._pending_categories["1d"] == {"stock"}
+    queue_logs = [line for line in service.status()["logs"] if "[ON_DEMAND][QUEUE]" in line]
+    assert len(queue_logs) == 1
+
+
+def test_pending_stock_refresh_does_not_build_crypto(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_AUTO_REFRESH", "0")
+    service = MarketDataService(CpuShapeSearchManager(str(tmp_path)))
+    captured = []
+
+    def fake_build(config, timeframe, _log, _progress):
+        captured.append((timeframe, config["_refresh_categories"]))
+        return [], {
+            "categories": {
+                "stock": {
+                    "source": "AKSHARE",
+                    "selected": 0,
+                    "built": 0,
+                    "complete": False,
+                    "error": "test",
+                }
+            }
+        }
+
+    monkeypatch.setattr("core.market_data_service.build_market_dataset", fake_build)
+    service.ensure_timeframe("1d", categories=["stock"], user_requested=True)
+    service._refresh_once(force=False)
+
+    assert captured == [("1d", ["stock"])]
 
 
 def test_active_buckets_do_not_include_futures():

@@ -38,9 +38,11 @@ python .\start_all.py
 
 - FastAPI 启动时先加载 `data/cpu_shape_search/cpu_market_sequences.npz`，随后在后台检查刷新；手绘请求只搜索内存缓存，不拉行情、不重建特征库。
 - A 股固定使用 AKShare；Crypto 使用 Binance `data-api.binance.vision` 仅市场数据域名，无需 API Key，也不包含账户或交易接口。客户端只允许 `exchangeInfo`、`ticker/24hr`、`klines` 三个 GET 路径，拒绝订单及账户路径。参数持久化到 `market_data_config.json`，运行状态写入 `market_data_manifest.json`。
+- 服务端不要求配置代理，也不会在启动或故障时改写代理环境。AKShare 东财全市场排名失败时，首次建库会切换 AKShare 新浪快照并按成交量选池；日/周 K 线使用 AKShare 腾讯备用端点。已有缓存时优先复用缓存标的，所有失败均保留旧缓存并进入有上限的退避。
+- A 股东财/腾讯 K 线最多使用 4 个下载线程；腾讯链路不依赖新浪日线的 JavaScript 解码器，因此不会触发 `py_mini_racer` 多线程崩溃。AKShare 内部进度输出被统一收敛到服务端数据进度条。
 - 默认日线、A 股按市值前 300、Crypto 按 USDT 24h 成交额前 300、CPU 多尺度、每标的最新 300 根。网页/手表可多选周期并分别配置数量、前/后 N；A 股可选择市值/成交量/量比与行业板块，Crypto 可选择 Binance 24h 成交额、基础币成交量、成交笔数或涨跌幅。数量 `0` 表示全部候选。
 - 支持 `5m / 15m / 30m / 60m / 4h / 1d / 1w`，旧 `1h` 配置/缓存自动迁移为 `60m`。A 股分钟 token 在午休、收盘和周末冻结；到检查点后会抓取并比较缓存与新数据的末根 K 线时间，只有时间推进才原子替换。抓取完整但无新 K 线会记录 `NO_NEW_KLINE` 并推进检查 token，抓取不完整则记录明细并保留重试。
-- 硬件请求未缓存周期时，`POST /shape/match` 返回 HTTP 202 / `code=1001 DATA_BUILDING`，服务端按当前选池、数量、窗口和多尺度参数自动追加周期并后台建库。客户端可等待并轮询，也可放弃；放弃不会终止服务器刷新。
+- 硬件请求未缓存周期/品类时，`POST /shape/match` 返回 HTTP 202 / `code=1001 DATA_BUILDING`，服务端只排队实际缺失的 A 股或 Crypto 桶。用户请求可越过一次旧失败退避，同品类五分钟内自动去重；客户端可等待并轮询，也可放弃，放弃不会终止服务器刷新。
 - 每个标的只存连续行情，不预切并永久保存大量重叠窗口。
 - 普通模式默认只匹配最新窗口；自适应缩放模式让不同原始 K 线长度统一重采样为查询特征长度。
 - 新构建的数据同时保存时间戳、close 和 OHLC；旧数据缺少 OHLC 时，详情接口会返回 `ohlc_exact=false`，硬件退化为 close 折线而不会伪造蜡烛。

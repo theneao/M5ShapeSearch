@@ -83,6 +83,8 @@ server/tests/_smoke_real_ui_out.txt
 server/acceptance_report_latest.json
 server/FINAL_REPORT.txt
 server/START_INTERACTIVE_DEMO.txt
+server/*.log
+server/logs/
 
 sdkconfig
 sdkconfig.old
