@@ -32,6 +32,11 @@ AKShare A 股 + Binance Public Crypto 市场数据构建器。
 修改作用：腾讯/东财 K 线链路使用最多 4 个下载线程；避开新浪日线 py_mini_racer 的线程崩溃问题，
           同时静默 AKShare 内部 tqdm，由统一数据进度条展示进度。
 
+修改时间：2026-08-31
+修改作用：分钟 K 线东财故障按 pool/daily/minute 独立熔断；逐标的异常改为批次单条汇总，
+          熔断期间立即跳过后续请求并保留旧缓存，避免代理故障刷出数百条长 URL。
+使用方式：无需配置代理；分钟接口恢复后按五分钟熔断窗口自动重试。
+
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -43,6 +48,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 import io
 import importlib
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -68,16 +74,58 @@ STOCK_METRICS = {
 CRYPTO_METRICS = {
     "volume": "24小时成交量",
 }
-_eastmoney_unavailable_until = 0.0
+_eastmoney_unavailable_until: Dict[str, float] = {
+    "pool": 0.0,
+    "daily": 0.0,
+    "minute": 0.0,
+}
+_stock_fetch_failure_lock = threading.Lock()
+_stock_fetch_failures: Dict[str, Dict[str, Any]] = {}
 
 
-def _mark_eastmoney_unavailable(seconds: int = 300) -> None:
-    global _eastmoney_unavailable_until
-    _eastmoney_unavailable_until = max(_eastmoney_unavailable_until, time.time() + seconds)
+def _mark_eastmoney_unavailable(channel: str, seconds: int = 300) -> None:
+    _eastmoney_unavailable_until[channel] = max(
+        _eastmoney_unavailable_until.get(channel, 0.0), time.time() + seconds
+    )
 
 
-def _eastmoney_available() -> bool:
-    return time.time() >= _eastmoney_unavailable_until
+def _clear_eastmoney_unavailable(channel: str) -> None:
+    _eastmoney_unavailable_until[channel] = 0.0
+
+
+def _eastmoney_available(channel: str) -> bool:
+    return time.time() >= _eastmoney_unavailable_until.get(channel, 0.0)
+
+
+def _compact_stock_fetch_error(error: Exception) -> str:
+    text = f"{type(error).__name__}: {error}"
+    if "ProxyError" in text:
+        return "ProxyError: proxy could not reach the market source"
+    if "RemoteDisconnected" in text:
+        return "RemoteDisconnected: market source closed the connection"
+    if "Timeout" in text:
+        return "Timeout: market source did not respond"
+    return text if len(text) <= 180 else text[:177] + "..."
+
+
+def _record_stock_fetch_failure(timeframe: str, error: Exception) -> None:
+    reason = _compact_stock_fetch_error(error)
+    with _stock_fetch_failure_lock:
+        item = _stock_fetch_failures.setdefault(
+            timeframe, {"count": 0, "reason": reason}
+        )
+        item["count"] = int(item.get("count", 0)) + 1
+
+
+def _clear_stock_fetch_failures(timeframe: str) -> None:
+    with _stock_fetch_failure_lock:
+        _stock_fetch_failures.pop(timeframe, None)
+
+
+def _take_stock_fetch_failures(timeframe: str) -> Optional[Dict[str, Any]]:
+    with _stock_fetch_failure_lock:
+        item = _stock_fetch_failures.pop(timeframe, None)
+    return dict(item) if item else None
 
 
 def _fetch_stock_daily_tx(
@@ -186,13 +234,12 @@ def select_stock_pool(
     try:
         frame = ak.stock_zh_a_spot_em()
     except Exception as exc:
-        _mark_eastmoney_unavailable()
+        _mark_eastmoney_unavailable("pool")
         # 新浪快照没有行业字段；限定板块时不能悄悄扩大为全市场。
         if str(sector or "all").strip().lower() != "all":
             raise
         return _select_stock_pool_sina(count, metric, order, log, exc)
-    global _eastmoney_unavailable_until
-    _eastmoney_unavailable_until = 0.0
+    _clear_eastmoney_unavailable("pool")
     required = {"代码", "名称", metric_column}
     if frame is None or not required.issubset(set(frame.columns)):
         missing = sorted(required - set(frame.columns if frame is not None else []))
@@ -316,7 +363,7 @@ def fetch_stock_ohlcv(
     start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
     try:
         if canonical_timeframe in {"1d", "1w"}:
-            if _eastmoney_available():
+            if _eastmoney_available("daily"):
                 try:
                     period = "weekly" if canonical_timeframe == "1w" else "daily"
                     frame = ak.stock_zh_a_hist(
@@ -332,9 +379,10 @@ def fetch_stock_ohlcv(
                         limit,
                     )
                     if result is not None:
+                        _clear_eastmoney_unavailable("daily")
                         return result
                 except Exception:
-                    _mark_eastmoney_unavailable()
+                    _mark_eastmoney_unavailable("daily")
 
             exchange = str(symbol).split(":", 1)[0].lower()
             if exchange not in {"sh", "sz"}:
@@ -363,6 +411,11 @@ def fetch_stock_ohlcv(
         start_dt = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d 09:30:00")
         end_dt = datetime.now().strftime("%Y-%m-%d 15:00:00")
         ak_period = minute_periods[canonical_timeframe]
+        if not _eastmoney_available("minute"):
+            _record_stock_fetch_failure(
+                canonical_timeframe, RuntimeError("EastMoney minute circuit is open")
+            )
+            return None
         frame = ak.stock_zh_a_hist_min_em(
             symbol=code,
             start_date=start_dt,
@@ -370,6 +423,7 @@ def fetch_stock_ohlcv(
             period=ak_period,
             adjust="qfq",
         )
+        _clear_eastmoney_unavailable("minute")
         if canonical_timeframe == "4h" and frame is not None and len(frame):
             frame = frame.copy()
             frame["时间"] = pd.to_datetime(frame["时间"])
@@ -387,7 +441,9 @@ def fetch_stock_ohlcv(
             limit,
         )
     except Exception as exc:
-        _log(log, f"[AKSHARE][KLINE][ERROR] {symbol}: {type(exc).__name__}: {exc}")
+        if canonical_timeframe in minute_periods:
+            _mark_eastmoney_unavailable("minute")
+        _record_stock_fetch_failure(canonical_timeframe, exc)
         return None
 
 
@@ -536,6 +592,7 @@ def build_market_dataset(
     stock_jobs = [job for job in jobs if job[0] == "stock"]
     crypto_jobs = [job for job in jobs if job[0] == "crypto"]
     if stock_jobs:
+        _clear_stock_fetch_failures(timeframe)
         stock_concurrency = min(4, len(stock_jobs))
         _log(log, f"[AKSHARE][BATCH] jobs={len(stock_jobs)}, concurrency={stock_concurrency}")
 
@@ -554,7 +611,23 @@ def build_market_dataset(
                     consume(category, symbol, name, future.result())
                 except Exception as exc:
                     skipped_by_category[category] = skipped_by_category.get(category, 0) + 1
-                    _log(log, f"[AKSHARE][KLINE][ERROR] {symbol}: {type(exc).__name__}: {exc}")
+                    _record_stock_fetch_failure(timeframe, exc)
+
+        stock_failures = _take_stock_fetch_failures(timeframe)
+        if stock_failures:
+            details = report["categories"].setdefault("stock", {})
+            details["complete"] = False
+            details["kline_failures"] = int(stock_failures["count"])
+            details["error"] = str(stock_failures["reason"])
+            report["warnings"].append(
+                f"A 股 {timeframe} K 线抓取失败 {stock_failures['count']} 个，保留旧缓存"
+            )
+            _log(
+                log,
+                f"[AKSHARE][KLINE][SUMMARY] timeframe={timeframe}, "
+                f"failed={stock_failures['count']}, "
+                f"reason={stock_failures['reason']}; old cache retained",
+            )
 
     if crypto_jobs and binance_client is not None:
         concurrency = min(8, max(1, int(crypto_cfg.get("binance_concurrency", 4))))
