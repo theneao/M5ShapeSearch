@@ -9,17 +9,13 @@
  * 修改时间：2026-08-30
  * 修改作用：参考 x-track 页面管理器，仅动画根节点坐标，取消全屏透明度混合，降低圆屏切页重绘成本。
  * 使用方式：Motion=Smooth 使用 240ms ease-out；Eco 使用 100ms。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：466×466 QSPI 面板不再逐帧移动全屏设置容器，改为单帧切页，消除带宽不足造成的卡顿。
+ * 使用方式：菜单进入和返回立即响应；首页图标仍保留小区域动画反馈。
  */
 #include "view.h"
 #include <assets/assets.h>
-#include <hal/utils/settings/settings.h>
-
-namespace {
-void menu_animation_set_x(void* object, int32_t value)
-{
-    lv_obj_set_x(static_cast<lv_obj_t*>(object), value);
-}
-}
 
 using namespace view;
 using namespace uitk::lvgl_cpp;
@@ -51,17 +47,9 @@ SelectMenuPage::SelectMenuPage(std::vector<MenuSection> sections) : _sections(st
     }
     cursor_y += 20;
 
-    Settings motion_settings("ui_motion", false);
-    const bool smooth = motion_settings.GetBool("smooth", true);
-    lv_obj_set_x(_pannel->get(), 42);
-    lv_anim_t animation;
-    lv_anim_init(&animation);
-    lv_anim_set_var(&animation, _pannel->get());
-    lv_anim_set_values(&animation, 42, 0);
-    lv_anim_set_duration(&animation, smooth ? 240 : 100);
-    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&animation, &menu_animation_set_x);
-    lv_anim_start(&animation);
+    // 整页位移会让 466×466 的脏区在每一帧都覆盖全屏；在 QSPI 面板上
+    // 单次稳定提交比低帧率的全屏动画更快，也不会出现上下割裂。
+    lv_obj_set_x(_pannel->get(), 0);
 }
 
 void SelectMenuPage::update()

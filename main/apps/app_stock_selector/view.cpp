@@ -17,6 +17,10 @@
  * 修改时间：2026-08-30
  * 修改作用：参考 x-track 仅移动页面根节点，取消与位移动画叠加的全屏淡入，减少 RGB565 软件混合和无效区域。
  * 使用方式：绘制、结果和详情页自动使用 240ms/100ms 位移动画。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：移除 466×466 页面根节点逐帧位移，内部页面改为一次提交，避免 QSPI 每帧传输约 434KB。
+ * 使用方式：绘制、结果、详情与返回均立即切页；局部扫描和提示动画不受影响。
  */
 #include "view.h"
 // 修改时间：2026-08-29
@@ -141,11 +145,6 @@ void StockSelectorView::buttonEvent(lv_event_t* event)
     }
 }
 
-void StockSelectorView::animationSetX(void* object, int32_t value)
-{
-    lv_obj_set_x(static_cast<lv_obj_t*>(object), value);
-}
-
 void StockSelectorView::destroyPage()
 {
     _draw_canvas.reset();
@@ -171,20 +170,11 @@ void StockSelectorView::destroyPage()
 
 void StockSelectorView::animatePageIn(int fromX)
 {
+    (void)fromX;
     if (_page == nullptr) {
         return;
     }
-    lv_obj_set_x(_page, fromX);
-    lv_anim_t animation;
-    lv_anim_init(&animation);
-    lv_anim_set_var(&animation, _page);
-    lv_anim_set_values(&animation, fromX, 0);
-    Settings motion_settings("ui_motion", false);
-    const bool smooth = motion_settings.GetBool("smooth", true);
-    lv_anim_set_duration(&animation, smooth ? 240 : 100);
-    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&animation, &StockSelectorView::animationSetX);
-    lv_anim_start(&animation);
+    lv_obj_set_x(_page, 0);
 }
 
 void StockSelectorView::createDrawPage(bool animate)

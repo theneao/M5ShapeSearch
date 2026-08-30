@@ -61,7 +61,6 @@ private:
     };
 
     static void buttonEvent(lv_event_t* event);
-    static void animationSetX(void* object, int32_t value);
     void handleAction(Action action, int value);
     void createDrawPage(bool animate = true);
     void createResultsPage(bool animate = true);

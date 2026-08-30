@@ -21,6 +21,10 @@
 // 修改时间：2026-08-30
 // 修改作用：参考 x-track 的单属性根节点动画，移除滚动过程中逐帧标签透明度计算，缩短切换时间。
 // 使用方式：A/B 或触屏滑动保持 ease-out；Smooth=240ms，Eco=100ms。
+// 修改时间：2026-08-30
+// 修改作用：针对 466×466 QSPI 圆屏，将超宽滚动容器重构为单图标短行程两段动画；
+//           动画期间只刷新约 248×200 图标区域，并串行处理连续输入。
+// 使用方式：A/B、左右箭头或左右滑动切换；点击中心图标进入当前功能。
 #include <mooncake_log.h>
 #include <assets/assets.h>
 #include <functional>
@@ -204,11 +208,9 @@ private:
 
 static std::string _tag        = "LauncherView";
 static constexpr int _icon_gap = 466;
-// 3 组足够覆盖左右循环：[0:左备用] [1:当前] [2:右备用]。
-static constexpr int _loop_copies       = 3;
-static constexpr int _center_copy_index = 1;
+static constexpr int _icon_transition_distance = 48;
 
-static int _last_clicked_icon_pos_x = -1;
+static int _last_selected_index = 0;
 static std::unique_ptr<PageIndicator> _page_indicator;
 static std::unique_ptr<DynamicIconLabel> _dynamic_icon_label;
 
@@ -228,6 +230,7 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     mclog::tagInfo(_tag, "init");
 
     _key_manager = std::make_unique<input::KeyManager>();
+    _app_props = std::move(appPorps);
     Settings motion_settings("ui_motion", false);
     _smooth_motion = motion_settings.GetBool("smooth", true);
 
@@ -241,12 +244,10 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _panel->setSize(466, 466);
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
-    _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
     _panel->setBgColor(lv_color_hex(0x000000));
-    _panel->addFlag(LV_OBJ_FLAG_SCROLL_ONE);
+    _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _panel->setPaddingAll(0);
-    lv_obj_set_scroll_snap_x(_panel->get(), LV_SCROLL_SNAP_CENTER);
-    lv_obj_add_event_cb(_panel->get(), &LauncherView::scroll_begin_event_cb, LV_EVENT_SCROLL_BEGIN, this);
+    lv_obj_add_event_cb(_panel->get(), &LauncherView::gesture_event_cb, LV_EVENT_GESTURE, this);
 
     /* ---------------------------------- Icons --------------------------------- */
     int icon_x = 0;
@@ -254,44 +255,35 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     std::vector<std::string> icon_label_texts;
     std::vector<uint32_t> step_colors;
 
-    // Loop multiple times to create fake infinite scroll
-    for (int loop = 0; loop < _loop_copies; loop++) {
-        for (const auto& props : appPorps) {
-            // Icon panel
-            _icon_panels.push_back(std::make_unique<Container>(_panel->get()));
-            _icon_panels.back()->setAlign(LV_ALIGN_CENTER);
-            _icon_panels.back()->setSize(200, 200);
-            _icon_panels.back()->setPos(icon_x, icon_y);
-            _icon_panels.back()->setBorderWidth(0);
-            _icon_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-            _icon_panels.back()->setBgOpa(0);
-
-            // Icon click callback
-            auto app_id = props.appID;
-            auto pos_x  = icon_x;
-            _icon_panels.back()->onClick().connect([&, app_id, pos_x]() {
-                _clicked_app_id          = app_id;
-                _last_clicked_icon_pos_x = pos_x;
-            });
-
-            // Keep track of data for helpers
-            icon_label_texts.push_back(props.info.name);
-
-            uint32_t color = 0xDADADA;
-            if (props.info.userData != nullptr) {
-                color = *(uint32_t*)props.info.userData;
-            }
-            step_colors.push_back(color);
-
-            // Icon image
-            if (props.info.icon != nullptr) {
-                _icon_images.push_back(std::make_unique<Image>(_icon_panels.back()->get()));
-                _icon_images.back()->setSrc(props.info.icon);
-                _icon_images.back()->setAlign(LV_ALIGN_CENTER);
-            }
-
-            icon_x += _icon_gap;
+    for (const auto& props : _app_props) {
+        icon_label_texts.push_back(props.info.name);
+        uint32_t color = 0xDADADA;
+        if (props.info.userData != nullptr) {
+            color = *(uint32_t*)props.info.userData;
         }
+        step_colors.push_back(color);
+    }
+
+    // 首页只保留一个中心图标对象。切换时替换图片源并做短行程位移，
+    // 不再创建 3 组循环副本或移动 466px 宽的滚动容器。
+    _icon_panels.push_back(std::make_unique<Container>(_panel->get()));
+    _icon_panels.back()->setAlign(LV_ALIGN_CENTER);
+    _icon_panels.back()->setSize(200, 200);
+    _icon_panels.back()->setPos(icon_x, icon_y);
+    _icon_panels.back()->setBorderWidth(0);
+    _icon_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _icon_panels.back()->setBgOpa(0);
+    _icon_panels.back()->onClick().connect([this]() {
+        if (!_app_props.empty() && !_transition_running) {
+            _clicked_app_id = _app_props[_current_index].appID;
+            _last_selected_index = _current_index;
+        }
+    });
+
+    _icon_images.push_back(std::make_unique<Image>(_icon_panels.back()->get()));
+    _icon_images.back()->setAlign(LV_ALIGN_CENTER);
+    if (!_app_props.empty() && _app_props.front().info.icon != nullptr) {
+        _icon_images.back()->setSrc(_app_props.front().info.icon);
     }
 
     /* ------------------------------ LR indicators ----------------------------- */
@@ -327,7 +319,7 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     /* ------------------------------ Page indicator ---------------------------- */
     _page_indicator = std::make_unique<PageIndicator>();
-    _page_indicator->init(appPorps.size(), _icon_gap, _panel->get(), 0, 200);
+    _page_indicator->init(_app_props.size(), _icon_gap, _panel->get(), 0, 200);
 
     /* --------------------------- Dynamic icon label --------------------------- */
     _dynamic_icon_label = std::make_unique<DynamicIconLabel>();
@@ -340,41 +332,10 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _clock->addFlag(LV_OBJ_FLAG_FLOATING);
 
     /* ----------------------------- History restore ---------------------------- */
-    bool need_restore      = false;
-    int restore_icon_pos_x = -1;
-
-    // Normal start pos (Center of the repeated sets)
-    int base_offset_rounds = _center_copy_index * appPorps.size();
-    int default_start_x    = base_offset_rounds * _icon_gap;
-
-    // // If warm boot was requested
-    // if (GetHAL().getWarmRebootTarget() >= 0) {
-    //     auto app_index = GetHAL().getWarmRebootTarget();
-    //     mclog::tagInfo(_tag, "warm boot was requested, app index: {}", app_index);
-    //     app_index = uitk::clamp(app_index, 0, static_cast<int>(appPorps.size()) - 1);
-
-    //     // Restore to center set
-    //     restore_icon_pos_x = (base_offset_rounds + app_index) * _icon_gap;
-    //     need_restore       = true;
-    //     GetHAL().clearWarmRebootRequest();
-    // }
-
-    int logical_restore_index = 0;
-    if (_last_clicked_icon_pos_x != -1 && !appPorps.empty()) {
-        // 历史位置可能来自任意循环副本，恢复时统一映射到中间组。
-        logical_restore_index = (_last_clicked_icon_pos_x / _icon_gap) % appPorps.size();
-        restore_icon_pos_x = (base_offset_rounds + logical_restore_index) * _icon_gap;
-        need_restore             = true;
-        _last_clicked_icon_pos_x = -1;
+    if (!_app_props.empty()) {
+        _current_index = uitk::clamp(_last_selected_index, 0, static_cast<int>(_app_props.size()) - 1);
     }
-
-    if (!need_restore) {
-        restore_icon_pos_x = default_start_x;
-    }
-    _panel->scrollBy(-restore_icon_pos_x, 0, LV_ANIM_OFF);
-
-    _page_indicator->jumpTo(logical_restore_index);
-    _dynamic_icon_label->jumpTo(base_offset_rounds + logical_restore_index);
+    apply_current_icon();
 
     _state = STATE_NORMAL;
 
@@ -412,25 +373,124 @@ void LauncherView::update()
 
 void LauncherView::scroll_to_nearby_icon(int direction)
 {
-    auto current_scroll_x = _panel->getScrollX();
-    int current_index     = (current_scroll_x + _icon_gap / 2) / _icon_gap;
-    int target_index      = current_index + direction;
-
-    int target_x        = target_index * _icon_gap;
-    // 使用 LVGL 内部 scroll_x_anim；其每帧直接移动子对象，不再重复发送
-    // SCROLL_BEGIN/SCROLL_END 事件和执行边界、吸附计算。
-    lv_obj_scroll_to_x(_panel->get(), target_x, LV_ANIM_ON);
+    begin_icon_transition(direction);
 }
 
-void LauncherView::scroll_begin_event_cb(lv_event_t* event)
+void LauncherView::icon_animation_set_x(void* object, int32_t value)
 {
-    auto* animation = static_cast<lv_anim_t*>(lv_event_get_param(event));
-    auto* self      = static_cast<LauncherView*>(lv_event_get_user_data(event));
-    if (animation == nullptr || self == nullptr) {
+    lv_obj_set_x(static_cast<lv_obj_t*>(object), value);
+}
+
+void LauncherView::icon_animation_phase_one_completed(lv_anim_t* animation)
+{
+    auto* self = static_cast<LauncherView*>(lv_anim_get_user_data(animation));
+    if (self != nullptr) {
+        self->start_icon_enter_phase();
+    }
+}
+
+void LauncherView::icon_animation_phase_two_completed(lv_anim_t* animation)
+{
+    auto* self = static_cast<LauncherView*>(lv_anim_get_user_data(animation));
+    if (self != nullptr) {
+        self->finish_icon_transition();
+    }
+}
+
+void LauncherView::gesture_event_cb(lv_event_t* event)
+{
+    auto* self = static_cast<LauncherView*>(lv_event_get_user_data(event));
+    lv_indev_t* indev = lv_indev_active();
+    if (self == nullptr || indev == nullptr) {
         return;
     }
-    lv_anim_set_duration(animation, self->_smooth_motion ? 240 : 100);
-    lv_anim_set_path_cb(animation, lv_anim_path_ease_out);
+    const lv_dir_t direction = lv_indev_get_gesture_dir(indev);
+    if (direction == LV_DIR_LEFT) {
+        self->begin_icon_transition(1);
+    } else if (direction == LV_DIR_RIGHT) {
+        self->begin_icon_transition(-1);
+    }
+}
+
+void LauncherView::begin_icon_transition(int direction)
+{
+    if (_app_props.size() < 2 || _icon_panels.empty() || direction == 0) {
+        return;
+    }
+    direction = direction > 0 ? 1 : -1;
+    if (_transition_running) {
+        _queued_direction = direction;
+        return;
+    }
+
+    _transition_running = true;
+    _transition_direction = direction;
+    lv_obj_t* icon = _icon_panels.front()->get();
+    lv_anim_delete(icon, &LauncherView::icon_animation_set_x);
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, icon);
+    lv_anim_set_user_data(&animation, this);
+    lv_anim_set_values(&animation, lv_obj_get_x(icon), -direction * _icon_transition_distance);
+    lv_anim_set_duration(&animation, _smooth_motion ? 80 : 40);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_in);
+    lv_anim_set_exec_cb(&animation, &LauncherView::icon_animation_set_x);
+    lv_anim_set_completed_cb(&animation, &LauncherView::icon_animation_phase_one_completed);
+    lv_anim_start(&animation);
+}
+
+void LauncherView::start_icon_enter_phase()
+{
+    if (_app_props.empty() || _icon_panels.empty()) {
+        finish_icon_transition();
+        return;
+    }
+
+    const int count = static_cast<int>(_app_props.size());
+    _current_index = (_current_index + _transition_direction + count) % count;
+    apply_current_icon();
+
+    lv_obj_t* icon = _icon_panels.front()->get();
+    lv_obj_set_x(icon, _transition_direction * _icon_transition_distance);
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, icon);
+    lv_anim_set_user_data(&animation, this);
+    lv_anim_set_values(&animation, _transition_direction * _icon_transition_distance, 0);
+    lv_anim_set_duration(&animation, _smooth_motion ? 140 : 60);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&animation, &LauncherView::icon_animation_set_x);
+    lv_anim_set_completed_cb(&animation, &LauncherView::icon_animation_phase_two_completed);
+    lv_anim_start(&animation);
+}
+
+void LauncherView::finish_icon_transition()
+{
+    _transition_running = false;
+    _transition_direction = 0;
+    if (!_icon_panels.empty()) {
+        lv_obj_set_x(_icon_panels.front()->get(), 0);
+    }
+
+    const int queued_direction = _queued_direction;
+    _queued_direction = 0;
+    if (queued_direction != 0) {
+        begin_icon_transition(queued_direction);
+    }
+}
+
+void LauncherView::apply_current_icon()
+{
+    if (_app_props.empty() || _icon_images.empty()) {
+        return;
+    }
+    const auto& props = _app_props[_current_index];
+    if (props.info.icon != nullptr) {
+        _icon_images.front()->setSrc(props.info.icon);
+    }
+    _page_indicator->jumpTo(_current_index);
+    _dynamic_icon_label->jumpTo(_current_index);
 }
 
 void LauncherView::handle_state_startup()
@@ -447,48 +507,7 @@ void LauncherView::handle_state_normal()
         _clicked_app_id = -1;
     }
 
-    handle_scroll_in_loop();
-
-    int scroll_x = _panel->getScrollX();
-    // mclog::tagInfo(_tag, "scroll x: {}", scroll_x);
-
-    _page_indicator->update(scroll_x);
-    _dynamic_icon_label->update(scroll_x);
-
     if (_clock) {
         _clock->update();
-    }
-}
-
-void LauncherView::handle_scroll_in_loop()
-{
-    // We get total size from underlying icons count / copies
-    int total_icons   = _icon_panels.size();
-    int icons_per_set = total_icons / _loop_copies;
-    int set_width_px  = icons_per_set * _icon_gap;
-
-    int current_scroll_x = _panel->getScrollX();
-
-    // 当前组固定为中间 Copy 1；进入左右备用组后瞬移回等价位置。
-    int center_set_start_x = _center_copy_index * set_width_px;
-    int left_trigger_limit  = center_set_start_x;
-    int right_trigger_limit = center_set_start_x + set_width_px;
-
-    // Wrap-around Logic
-    // Only perform teleport if we are NOT in an automated scroll animation
-    // (To avoid interrupting the snap/scroll-to animation which would leave us stuck between icons)
-    // However, if the user is manually dragging (PRESSED), we MUST teleport to allow infinite drag.
-    bool is_auto_scrolling = lv_obj_is_scrolling(_panel->get()) && !lv_obj_has_state(_panel->get(), LV_STATE_PRESSED);
-
-    if (!is_auto_scrolling) {
-        if (current_scroll_x < left_trigger_limit) {
-            // Too far left (Set 1), warp right to Set 2
-            // scrollBy(-val) increases scroll_x
-            _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
-        } else if (current_scroll_x >= right_trigger_limit) {
-            // Too far right (Set 3), warp left to Set 2
-            // scrollBy(+val) decreases scroll_x
-            _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);
-        }
     }
 }

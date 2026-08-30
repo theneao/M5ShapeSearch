@@ -131,7 +131,7 @@ public:
         _label_version->setTextFont(&lv_font_montserrat_14);
         _label_version->setTextColor(lv_color_hex(0x8B8B8B));
         _label_version->align(LV_ALIGN_BOTTOM_MID, 0, -12);
-        _label_version->setText(common::FirmwareVersion);
+        _label_version->setText(common::firmwareVersion());
     }
 
 private:
