@@ -13,6 +13,10 @@
  *
  * 修改时间：2026-08-29
  * 修改作用：形态页切换跟随 Smooth/Eco 档位，统一使用非线性 ease-out 过渡。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：参考 x-track 仅移动页面根节点，取消与位移动画叠加的全屏淡入，减少 RGB565 软件混合和无效区域。
+ * 使用方式：绘制、结果和详情页自动使用 240ms/100ms 位移动画。
  */
 #include "view.h"
 // 修改时间：2026-08-29
@@ -171,18 +175,16 @@ void StockSelectorView::animatePageIn(int fromX)
         return;
     }
     lv_obj_set_x(_page, fromX);
-    lv_obj_set_style_opa(_page, LV_OPA_60, LV_PART_MAIN);
     lv_anim_t animation;
     lv_anim_init(&animation);
     lv_anim_set_var(&animation, _page);
     lv_anim_set_values(&animation, fromX, 0);
     Settings motion_settings("ui_motion", false);
     const bool smooth = motion_settings.GetBool("smooth", true);
-    lv_anim_set_duration(&animation, smooth ? 320 : 140);
+    lv_anim_set_duration(&animation, smooth ? 240 : 100);
     lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&animation, &StockSelectorView::animationSetX);
     lv_anim_start(&animation);
-    lv_obj_fade_in(_page, 220, 0);
 }
 
 void StockSelectorView::createDrawPage(bool animate)

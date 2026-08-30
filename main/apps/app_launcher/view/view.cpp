@@ -18,6 +18,9 @@
 // 修改作用：移除页面构造期间的同步强制刷新，避免与 LVGL 刷新任务竞争导致图层残缺。
 // 修改时间：2026-08-30
 // 修改作用：首页循环副本从 5 组减为 3 组，并在首帧前直接定位中间组，减少布局负担和启动跳帧。
+// 修改时间：2026-08-30
+// 修改作用：参考 x-track 的单属性根节点动画，移除滚动过程中逐帧标签透明度计算，缩短切换时间。
+// 使用方式：A/B 或触屏滑动保持 ease-out；Smooth=240ms，Eco=100ms。
 #include <mooncake_log.h>
 #include <assets/assets.h>
 #include <functional>
@@ -126,9 +129,7 @@ private:
 /* -------------------------------------------------------------------------- */
 class DynamicIconLabel {
 public:
-    const int show_range      = 150;
     const int pos_y           = 155;
-    const int transition_zone = 80;
 
     void init(const std::vector<std::string>& iconLabelTexts, int iconGap, lv_obj_t* parent)
     {
@@ -165,10 +166,8 @@ public:
     {
         _last_index = _current_index;
 
-        // Calculate current icon index and distance to icon center
+        // 只在最近图标改变时更新文本；不再把透明度作为第二条逐帧动画。
         _current_index        = (scrollValue + _icon_gap / 2) / _icon_gap;
-        int icon_center_pos_x = _current_index * _icon_gap;
-        int distance_to_icon  = std::abs(scrollValue - icon_center_pos_x);
 
         // Clamp index
         if (_current_index < 0) {
@@ -178,21 +177,9 @@ public:
             _current_index = _icon_label_texts.size() - 1;
         }
 
-        // Check if label should be visible
-        bool should_be_visible = (distance_to_icon <= show_range);
-
         // If index changed, update label text
         if (_last_index != _current_index) {
             _label->setText(_icon_label_texts[_current_index]);
-        }
-
-        // Update opacity based on distance when in transition zone
-        if (should_be_visible && distance_to_icon > (show_range - transition_zone)) {
-            // Fade out as approaching edge
-            float fade_ratio = 1.0f - (float)(distance_to_icon - (show_range - transition_zone)) / transition_zone;
-            set_opacity(static_cast<lv_opa_t>(255 * fade_ratio));
-        } else if (should_be_visible) {
-            set_opacity(255);
         }
     }
 
@@ -201,7 +188,6 @@ private:
     int _icon_gap      = 0;
     int _current_index = 0;
     int _last_index    = 0;
-    bool _is_visible   = false;
     int _last_opacity  = -1;
 
     std::unique_ptr<Label> _label;
@@ -443,7 +429,7 @@ void LauncherView::scroll_begin_event_cb(lv_event_t* event)
     if (animation == nullptr || self == nullptr) {
         return;
     }
-    lv_anim_set_duration(animation, self->_smooth_motion ? 300 : 120);
+    lv_anim_set_duration(animation, self->_smooth_motion ? 240 : 100);
     lv_anim_set_path_cb(animation, lv_anim_path_ease_out);
 }
 

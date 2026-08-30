@@ -18,6 +18,11 @@
  * 修改时间：2026-08-30
  * 修改作用：关闭分块自动上屏，等待 LVGL 一帧最后一个 flush 后统一提交，消除滑动时上下画面割裂。
  * 使用方式：由 lv_display_flush_is_last() 自动判定帧边界，无需页面代码配合。
+ *
+ * 修改时间：2026-08-30
+ * 修改作用：按 LVGL 官方建议把 PARTIAL 绘制缓冲缩至约 1/10 屏，并优先放入内部 DMA RAM；
+ *           保留 AMOLED 帧缓冲的末次 flush 统一提交，减少 PSRAM 绘制延迟。
+ * 使用方式：Smooth/Eco 设置不变；内部 RAM 不足时自动回退 PSRAM。
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
@@ -291,8 +296,8 @@ Hal::TouchPoint Hal::getTouchPoint()
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
 
-// 每块保持偶数行，CO5300 帧缓冲的偶数区域扩展不会读到尚未绘制的相邻行；整屏最多两次提交。
-static constexpr uint32_t kLvBufferLines       = 234;
+// PARTIAL 模式按官方建议使用约 1/10 屏缓冲。48 为偶数，满足 CO5300 区域对齐要求。
+static constexpr uint32_t kLvBufferLines        = 48;
 static constexpr uint32_t kSmoothRefreshPeriod = 16;
 static constexpr uint32_t kEcoRefreshPeriod    = 33;
 
@@ -400,11 +405,23 @@ void Hal::lvgl_init()
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_add_event_cb(disp, lvgl_rounder_event_cb, LV_EVENT_INVALIDATE_AREA, nullptr);
 
-    // RGB565 双 234 行缓冲。partial 模式仍只重绘无效区域，整屏刷新最多拆成两个偶数边界区域。
+    // 优先在片内 DMA RAM 绘制，避免 CPU 在 PSRAM 上进行圆角、透明度和图片混合。
+    // AMOLED 自身帧缓冲继续负责把多个 partial flush 合并成一帧，最后一次 flush 才上屏。
     static const uint32_t buffer_size = _display->width() * kLvBufferLines *
                                         LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565);
-    static uint8_t *buf1 = static_cast<uint8_t *>(heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    static uint8_t *buf2 = static_cast<uint8_t *>(heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    auto allocate_draw_buffer = []() -> uint8_t* {
+        uint8_t* buffer = static_cast<uint8_t*>(
+            heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT)
+        );
+        if (buffer == nullptr) {
+            buffer = static_cast<uint8_t*>(
+                heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+            );
+        }
+        return buffer;
+    };
+    static uint8_t *buf1 = allocate_draw_buffer();
+    static uint8_t *buf2 = allocate_draw_buffer();
     if (buf1 == nullptr) {
         mclog::tagError(_tag, "LVGL primary draw buffer allocation failed: {} bytes", buffer_size);
         return;
@@ -418,7 +435,7 @@ void Hal::lvgl_init()
     const bool smooth_motion = motion_settings.GetBool("smooth", true);
     lv_timer_set_period(lv_display_get_refr_timer(disp),
                         smooth_motion ? kSmoothRefreshPeriod : kEcoRefreshPeriod);
-    mclog::tagInfo(_tag, "LVGL direct flush: {} lines, {} bytes, refresh={}ms", kLvBufferLines, buffer_size,
+    mclog::tagInfo(_tag, "LVGL partial double buffer: {} lines, {} bytes, refresh={}ms", kLvBufferLines, buffer_size,
                    smooth_motion ? kSmoothRefreshPeriod : kEcoRefreshPeriod);
 
     lvTouchpad = lv_indev_create();
