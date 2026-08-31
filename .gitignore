@@ -89,5 +89,9 @@ server/START_INTERACTIVE_DEMO.txt
 server/*.log
 server/logs/
 
+# Gradio local runtime/cache state
+.gradio/
+server/.gradio/
+
 sdkconfig
 sdkconfig.old

@@ -4,10 +4,9 @@
 形态搜索统一 Web UI（手绘页 + 整体设置页）。
 
 创建时间：2026-08-28
-作用：7860 提供手绘匹配和同步设置；7861 提供独立的整体设置页。
-      两个页面都通过 FastAPI 读写同一份持久化配置，不在 Gradio 进程内重复拉行情/建库。
-使用方式：python server_web_ui.py --mode demo --port 7860；
-          python server_web_ui.py --mode settings --port 7861。
+作用：7860 提供手绘匹配、市场数据配置和运行看板；页面通过 FastAPI 读写持久化配置，
+      不在 Gradio 进程内重复拉行情/建库。
+使用方式：python server_web_ui.py --port 7860。
 
 修改时间：2026-08-28
 修改作用：Crypto 设置切换为 Binance Public，增加 quote 资产、请求间隔、并发数、每分钟权重预算和重试次数。
@@ -25,6 +24,11 @@
 修改作用：兼容新版 Gradio ImageEditor 将 composite/background 返回为 NumPy 数组；
           禁止对数组执行布尔 or，避免点击手绘匹配时报数组真值不明确。
 使用方式：7860 页面继续直接绘图并点击匹配，无需转换上传格式。
+
+修改时间：2026-08-31
+修改作用：将原 7861 整体设置页完整合并到 7860，并兼容 ImageEditor 的 layers 回退结构；
+          所有图片候选均显式判空，不再对 NumPy 数组求布尔值。
+使用方式：打开 7860，在顶部标签中切换手绘匹配、连接、市场数据和运行状态。
 """
 from __future__ import annotations
 
@@ -71,9 +75,21 @@ def _sketch_to_points(value: Any, min_points: int = 20) -> List[List[float]]:
         return []
     background = None
     if isinstance(value, dict):
-        background = value.get("background")
-        composite = value.get("composite")
-        value = composite if composite is not None else background
+        editor_value = value
+        background = editor_value.get("background")
+        composite = editor_value.get("composite")
+        if composite is not None:
+            value = composite
+        else:
+            value = None
+            layers = editor_value.get("layers")
+            if isinstance(layers, (list, tuple)):
+                for layer in reversed(layers):
+                    if layer is not None:
+                        value = layer
+                        break
+            if value is None:
+                value = background
     if value is None:
         return []
     if not isinstance(value, Image.Image):
@@ -501,62 +517,60 @@ def add_settings_tabs(app: gr.Blocks) -> None:
             timer.tick(refresh_status, outputs=status_outputs)
 
 
-def create_app(mode: str) -> gr.Blocks:
+def create_app() -> gr.Blocks:
     with gr.Blocks(title="M5 Shape Search") as app:
         gr.Markdown("# M5 Shape Search")
-        if mode == "demo":
-            with gr.Tab("手绘匹配"):
-                with gr.Row():
-                    with gr.Column(scale=4):
-                        sketch = gr.Sketchpad(label="画板", height=410, sources=[])
-                        with gr.Row():
-                            timeframe = gr.Radio(
-                                ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
-                                value="1d", label="K 线周期",
-                            )
-                            category = gr.Radio(["all", "stock", "crypto"], value="all", label="品类")
-                            top_k = gr.Slider(1, 20, value=10, step=1, label="Top K")
-                        with gr.Row():
-                            match_button = gr.Button("开始服务端匹配", variant="primary")
-                            cancel_button = gr.Button("取消等待", variant="stop")
-                            clear_button = gr.Button("清空")
-                        match_status = gr.Markdown("")
-                    with gr.Column(scale=6):
-                        comparison = gr.Plot(label="对比图")
-                        gallery = gr.Gallery(label="结果缩略图", columns=2, height=390, object_fit="contain")
-                table = gr.Dataframe(
-                    headers=["Rank", "Similarity", "Category", "Symbol", "Name", "K", "NCC", "dNCC", "Turning", "ShapeDTW", "Change"],
-                    interactive=False,
-                )
-                with gr.Row():
-                    selected = gr.Dropdown(label="查看单标的 K 线详情")
-                    detail_button = gr.Button("加载详情")
-                detail_plot = gr.Plot(label="单标的 K 线")
-                detail_status = gr.Markdown("")
+        with gr.Tab("手绘匹配"):
+            with gr.Row():
+                with gr.Column(scale=4):
+                    sketch = gr.Sketchpad(label="画板", height=410, sources=[])
+                    with gr.Row():
+                        timeframe = gr.Radio(
+                            ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+                            value="1d", label="K 线周期",
+                        )
+                        category = gr.Radio(["all", "stock", "crypto"], value="all", label="品类")
+                        top_k = gr.Slider(1, 20, value=10, step=1, label="Top K")
+                    with gr.Row():
+                        match_button = gr.Button("开始服务端匹配", variant="primary")
+                        cancel_button = gr.Button("取消等待", variant="stop")
+                        clear_button = gr.Button("清空")
+                    match_status = gr.Markdown("")
+                with gr.Column(scale=6):
+                    comparison = gr.Plot(label="对比图")
+                    gallery = gr.Gallery(label="结果缩略图", columns=2, height=390, object_fit="contain")
+            table = gr.Dataframe(
+                headers=["Rank", "Similarity", "Category", "Symbol", "Name", "K", "NCC", "dNCC", "Turning", "ShapeDTW", "Change"],
+                interactive=False,
+            )
+            with gr.Row():
+                selected = gr.Dropdown(label="查看单标的 K 线详情")
+                detail_button = gr.Button("加载详情")
+            detail_plot = gr.Plot(label="单标的 K 线")
+            detail_status = gr.Markdown("")
 
-                match_event = match_button.click(
-                    match_shape,
-                    inputs=[sketch, timeframe, category, top_k],
-                    outputs=[comparison, gallery, table, match_status, selected],
-                )
-                cancel_button.click(
-                    lambda: "已取消页面等待；FastAPI 中已开始的 CPU 精排会很快自行结束。",
-                    outputs=match_status,
-                    cancels=[match_event],
-                )
-                clear_button.click(lambda: None, outputs=sketch)
-                detail_button.click(load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status])
+            match_event = match_button.click(
+                match_shape,
+                inputs=[sketch, timeframe, category, top_k],
+                outputs=[comparison, gallery, table, match_status, selected],
+            )
+            cancel_button.click(
+                lambda: "已取消页面等待；FastAPI 中已开始的 CPU 精排会很快自行结束。",
+                outputs=match_status,
+                cancels=[match_event],
+            )
+            clear_button.click(lambda: None, outputs=sketch)
+            detail_button.click(load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status])
         add_settings_tabs(app)
     return app
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "settings"], default="demo")
     parser.add_argument("--port", type=int, default=7860)
     args = parser.parse_args()
-    print(f"[WEB] mode={args.mode}, API={API_BASE}, URL=http://127.0.0.1:{args.port}", flush=True)
-    create_app(args.mode).queue().launch(
+    print(f"[WEB] unified, API={API_BASE}, URL=http://127.0.0.1:{args.port}", flush=True)
+    create_app().queue().launch(
         server_name="127.0.0.1",
         server_port=args.port,
         show_error=True,

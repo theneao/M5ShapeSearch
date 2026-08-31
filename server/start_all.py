@@ -22,6 +22,10 @@
 修改时间：2026-08-30
 修改作用：项目统一更名为 M5ShapeSearch，并同步启动横幅。
 
+修改时间：2026-08-31
+修改作用：将手绘、数据设置和运行看板合并到唯一的 7860 Web UI，删除 7861 设置子进程；
+          启动、存活检查和退出清理均只管理 FastAPI 与统一 UI。
+
 使用方式：
     python start_all.py
 """
@@ -164,26 +168,20 @@ def main():
 
     api_port = int(os.environ.get("API_PORT", "8000"))
     requested_ui_port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
-    requested_settings_port = int(os.environ.get("SETTINGS_SERVER_PORT", "7861"))
     if not port_available(api_port):
         print(f"[ERROR] API 端口 {api_port} 已被占用。", flush=True)
         print("[HINT] 硬件固定连接 API 端口，请先停止旧的 FastAPI/start_all.py 再重试。", flush=True)
         return 2
-    # 先保留设置页的首选 7861，再为演示页选择端口，避免 7860 冲突时抢走 7861。
-    settings_port = choose_web_port(requested_settings_port, {api_port})
-    ui_port = choose_web_port(requested_ui_port, {api_port, settings_port}) if settings_port else None
-    if ui_port is None or settings_port is None:
+    ui_port = choose_web_port(requested_ui_port, {api_port})
+    if ui_port is None:
         print("[ERROR] 无法为 Gradio 页面找到空闲端口。", flush=True)
         return 2
     if ui_port != requested_ui_port:
         print(f"[WARN] UI 端口 {requested_ui_port} 已占用，改用 {ui_port}。", flush=True)
-    if settings_port != requested_settings_port:
-        print(f"[WARN] 设置端口 {requested_settings_port} 已占用，改用 {settings_port}。", flush=True)
     lan_ip = get_lan_ip()
 
     print(f"[INFO] API 服务端口: {api_port}")
     print(f"[INFO] UI 服务端口: {ui_port}\n")
-    print(f"[INFO] 整体设置端口: {settings_port}\n")
 
     # 父、子进程都使用 UTF-8 无缓冲输出，确保日志立即进入当前终端。
     env = os.environ.copy()
@@ -220,9 +218,9 @@ def main():
         return 3
 
     # 启动 Gradio
-    print("\n[STEP 2] 启动 Gradio 演示 UI...")
+    print("\n[STEP 2] 启动 Gradio 统一 UI...")
     ui_proc = subprocess.Popen(
-        [sys.executable, "-u", "server_web_ui.py", "--mode", "demo", "--port", str(ui_port)],
+        [sys.executable, "-u", "server_web_ui.py", "--port", str(ui_port)],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -234,28 +232,14 @@ def main():
     print(f"[OK] Gradio 进程已启动 (PID: {ui_proc.pid})")
     t_ui = threading.Thread(target=read_logs, args=(ui_proc, "UI"), daemon=True)
     t_ui.start()
-    print("\n[STEP 3] 启动整体设置 UI...")
-    settings_proc = subprocess.Popen(
-        [sys.executable, "-u", "server_web_ui.py", "--mode", "settings", "--port", str(settings_port)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        encoding="utf-8",
-        errors="replace",
-    )
-    print(f"[OK] 整体设置进程已启动 (PID: {settings_proc.pid})")
-    t_settings = threading.Thread(target=read_logs, args=(settings_proc, "SETTINGS"), daemon=True)
-    t_settings.start()
     time.sleep(5)
 
     failed = [(name, proc.returncode) for name, proc in (
-        ("API", api_proc), ("UI", ui_proc), ("SETTINGS", settings_proc)
+        ("API", api_proc), ("UI", ui_proc)
     ) if proc.poll() is not None]
     if failed:
         print(f"[ERROR] 页面启动校验失败: {failed}", flush=True)
-        for proc in (api_proc, ui_proc, settings_proc):
+        for proc in (api_proc, ui_proc):
             if proc.poll() is None:
                 proc.terminate()
         return 3
@@ -267,12 +251,10 @@ def main():
     print(f"   • Hardware/LAN: http://{lan_ip}:{api_port}")
     print(f"   • Health check: http://127.0.0.1:{api_port}/api/v1/health")
     print(f"   • API docs: http://127.0.0.1:{api_port}/docs")
-    print(f"\nDemo UI:   http://127.0.0.1:{ui_port}")
-    print(f"   • 手绘匹配 + 同步设置")
-    print(f"\nSettings:  http://127.0.0.1:{settings_port}")
-    print("   • 整体设置 / 数据刷新 / 运行状态")
+    print(f"\nUnified UI: http://127.0.0.1:{ui_port}")
+    print("   • 手绘匹配 / 整体设置 / 数据刷新 / 运行状态")
     print("\nWorkflow:")
-    print(f"   1. Open :{settings_port} to configure AKShare preload/cache")
+    print(f"   1. Open :{ui_port} to configure preload/cache or draw a shape")
     print("   2. Wait for Runtime Status to become ready")
     print(f"   3. Draw a shape in :{ui_port} or on M5StopWatch")
     print("   4. Matching only searches the preloaded memory cache\n")
@@ -283,25 +265,25 @@ def main():
     print("="*80 + "\n")
 
     try:
-        while all(proc.poll() is None for proc in (api_proc, ui_proc, settings_proc)):
+        while all(proc.poll() is None for proc in (api_proc, ui_proc)):
             time.sleep(0.5)
         exited = [(name, proc.returncode) for name, proc in (
-            ("API", api_proc), ("UI", ui_proc), ("SETTINGS", settings_proc)
+            ("API", api_proc), ("UI", ui_proc)
         ) if proc.poll() is not None]
         print(f"[ERROR] 子进程意外退出: {exited}", flush=True)
 
     except KeyboardInterrupt:
         print("\n\nShutting down...")
-        for proc in (api_proc, ui_proc, settings_proc):
+        for proc in (api_proc, ui_proc):
             if proc.poll() is None:
                 proc.terminate()
         time.sleep(1)
-        for proc in (api_proc, ui_proc, settings_proc):
+        for proc in (api_proc, ui_proc):
             if proc.poll() is None:
                 proc.kill()
         print("Services stopped")
     finally:
-        for proc in (api_proc, ui_proc, settings_proc):
+        for proc in (api_proc, ui_proc):
             if proc.poll() is None:
                 proc.terminate()
     return 0
