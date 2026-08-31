@@ -6,6 +6,9 @@
  * 修改作用：详情 K 线每次载入重置为完整窗口，缩放范围扩展到 8 根并按比例变化，增强视觉区分度。
  * 修改时间：2026-08-30
  * 修改作用：详情图按触摸像素连续平移，跨过一根 K 线后再提交整数窗口，松手时吸附到最近一根。
+ * 修改时间：2026-08-31
+ * 修改作用：结果缩略图中的手绘与匹配曲线分别按自身 X/Y 范围铺满绘图区，与 Web 对比图保持一致，便于直观看出形态差异。
+ * 使用方式：LinePreview 构造时一次性归一化两条曲线，绘制阶段不重复计算。
  */
 #include "chart_widgets.h"
 
@@ -43,6 +46,44 @@ void drawRect(lv_layer_t* layer, const lv_area_t& area, lv_color_t color, lv_opa
     lv_draw_rect(layer, &descriptor, &area);
 }
 
+std::vector<NormalizedPoint> stretchPreviewCurve(const std::vector<NormalizedPoint>& points)
+{
+    std::vector<NormalizedPoint> valid;
+    valid.reserve(points.size());
+    for (const NormalizedPoint& point : points) {
+        if (std::isfinite(point.x) && std::isfinite(point.y)) {
+            valid.push_back(point);
+        }
+    }
+    if (valid.empty()) {
+        return valid;
+    }
+
+    float minimum_x = valid.front().x;
+    float maximum_x = valid.front().x;
+    float minimum_y = valid.front().y;
+    float maximum_y = valid.front().y;
+    for (const NormalizedPoint& point : valid) {
+        minimum_x = std::min(minimum_x, point.x);
+        maximum_x = std::max(maximum_x, point.x);
+        minimum_y = std::min(minimum_y, point.y);
+        maximum_y = std::max(maximum_y, point.y);
+    }
+
+    const float range_x = maximum_x - minimum_x;
+    const float range_y = maximum_y - minimum_y;
+    for (std::size_t index = 0; index < valid.size(); ++index) {
+        // 横轴异常或所有点重合时仍按时序铺开；常量走势保持在垂直中线。
+        valid[index].x = range_x > 1e-6f
+            ? (valid[index].x - minimum_x) / range_x
+            : (valid.size() > 1 ? static_cast<float>(index) / static_cast<float>(valid.size() - 1) : 0.5f);
+        valid[index].y = range_y > 1e-6f
+            ? (valid[index].y - minimum_y) / range_y
+            : 0.5f;
+    }
+    return valid;
+}
+
 void drawNormalized(
     lv_layer_t* layer,
     const lv_area_t& area,
@@ -77,7 +118,7 @@ LinePreview::LinePreview(
     lv_obj_t* parent,
     const std::vector<NormalizedPoint>& query,
     const std::vector<NormalizedPoint>& match
-) : _query(query), _match(match)
+) : _query(stretchPreviewCurve(query)), _match(stretchPreviewCurve(match))
 {
     _object = lv_obj_create(parent);
     lv_obj_set_style_bg_color(_object, lv_color_hex(0x0C1424), LV_PART_MAIN);

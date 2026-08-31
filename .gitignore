@@ -97,6 +97,7 @@ server/.gradio/
 core.*
 *.dmp
 device_logs/
+device_screenshots/
 
 sdkconfig
 sdkconfig.old
