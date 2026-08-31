@@ -20,6 +20,11 @@
 
 修改时间：2026-08-29
 修改作用：数量 0 明确表示全部；补充刷新检查周期及 Binance 可用排序指标，与端侧数据页保持一致。
+
+修改时间：2026-08-31
+修改作用：兼容新版 Gradio ImageEditor 将 composite/background 返回为 NumPy 数组；
+          禁止对数组执行布尔 or，避免点击手绘匹配时报数组真值不明确。
+使用方式：7860 页面继续直接绘图并点击匹配，无需转换上传格式。
 """
 from __future__ import annotations
 
@@ -67,7 +72,8 @@ def _sketch_to_points(value: Any, min_points: int = 20) -> List[List[float]]:
     background = None
     if isinstance(value, dict):
         background = value.get("background")
-        value = value.get("composite") or background
+        composite = value.get("composite")
+        value = composite if composite is not None else background
     if value is None:
         return []
     if not isinstance(value, Image.Image):
