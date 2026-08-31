@@ -7,6 +7,11 @@
  *
  * 修改时间：2026-08-29
  * 修改作用：服务端按需构建缺失周期时显示等待状态；A/左滑可放弃，服务器仍继续建库。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：详情页加载期间按 A/左滑会同时取消 HTTP 请求并立即返回结果页；
+ *           不再要求先取消、再按一次返回，避免连续按键穿透多级页面并误关闭应用。
+ * 使用方式：详情页任意状态按一次 A 或左滑即可返回；绘图首页 A 才退出应用。
  */
 #include "app_stock_selector.h"
 
@@ -94,8 +99,15 @@ void AppStockSelector::onRunning()
         LvglLockGuard lock;
         if (go_home) {
             close_requested = true;
-        } else if (back_or_cancel && !cancelled_request) {
-            close_requested = !_view->goBack();
+        } else if (back_or_cancel) {
+            // 子页的返回优先级高于请求取消：一次 A/左滑应同时完成两件事。
+            // 绘图首页仍保留“忙时只取消，空闲时退出”的原有行为。
+            const bool on_child_page = _view->page() != stock_selector::StockSelectorView::Page::Draw;
+            if (on_child_page) {
+                close_requested = !_view->goBack();
+            } else if (!cancelled_request) {
+                close_requested = true;
+            }
         } else if (event == input::KeyEvent::GoNext) {
             _view->triggerPrimary();
         }
