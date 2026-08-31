@@ -23,6 +23,9 @@
 
 修改时间：2026-08-30
 修改作用：验证用户按需请求可越过一次旧退避、只下载指定缺失品类，并在五分钟内去重。
+
+修改时间：2026-08-31
+修改作用：验证目标周期首次建库时可复用其他 A 股周期的缓存标的池。
 """
 from __future__ import annotations
 
@@ -314,3 +317,34 @@ def test_periodic_refresh_keeps_cache_when_latest_kline_is_unchanged(tmp_path, m
     token = service._period_token("1d", "stock")
     assert service._manifest["category_period_tokens"]["stock_1d"] == token
     assert "无需替换" in service.status()["message"]
+
+
+def test_first_timeframe_build_reuses_stock_pool_from_other_timeframe(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_AUTO_REFRESH", "0")
+    manager = CpuShapeSearchManager(str(tmp_path))
+    assert manager.build_from_samples([_sample()], timeframe="1d") == 1
+    service = MarketDataService(manager)
+    service.update_config(
+        {"timeframes": ["30m"], "crypto": {"enabled": False}}, refresh=False
+    )
+
+    def fake_build(config, timeframe, _log, _progress):
+        assert timeframe == "30m"
+        assert config["_fallback_stock_pool"] == [
+            {"symbol": "SZ:000001", "name": "测试股票"}
+        ]
+        return [], {
+            "categories": {
+                "stock": {
+                    "source": "AKSHARE_CACHED_POOL",
+                    "selected": 1,
+                    "built": 0,
+                    "complete": False,
+                    "error": "test",
+                }
+            }
+        }
+
+    monkeypatch.setattr("core.market_data_service.build_market_dataset", fake_build)
+
+    service._refresh_once(force=False)

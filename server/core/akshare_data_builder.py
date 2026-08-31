@@ -37,6 +37,16 @@ AKShare A 股 + Binance Public Crypto 市场数据构建器。
           熔断期间立即跳过后续请求并保留旧缓存，避免代理故障刷出数百条长 URL。
 使用方式：无需配置代理；分钟接口恢复后按五分钟熔断窗口自动重试。
 
+修改时间：2026-08-31
+修改作用：东财日线显式设置请求超时；选池确认东财不可用时，本批日线直接切腾讯；
+          腾讯备用链路使用 AKShare 官方端点的有界请求实现，绕开其无超时前置探测。
+使用方式：正常网络无需代理；任一外部请求均受连接/读取超时约束，不会无限卡在首根 K 线。
+
+修改时间：2026-08-31
+修改作用：A 股分钟线在东财失败后切换到 AKShare 所用的新浪分钟端点，并施加连接/读取硬超时；
+          备用源也独立熔断，正常公网可访问时无需系统代理或虚拟网卡。
+使用方式：5m/15m/30m/60m/4h 构建自动切源；4h 继续由 60m 数据按交易日聚合。
+
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -47,7 +57,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 import io
-import importlib
+import json
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -74,27 +84,29 @@ STOCK_METRICS = {
 CRYPTO_METRICS = {
     "volume": "24小时成交量",
 }
-_eastmoney_unavailable_until: Dict[str, float] = {
-    "pool": 0.0,
-    "daily": 0.0,
-    "minute": 0.0,
+_source_unavailable_until: Dict[str, float] = {
+    "eastmoney_pool": 0.0,
+    "eastmoney_daily": 0.0,
+    "eastmoney_minute": 0.0,
+    "tencent_daily": 0.0,
+    "sina_minute": 0.0,
 }
 _stock_fetch_failure_lock = threading.Lock()
 _stock_fetch_failures: Dict[str, Dict[str, Any]] = {}
 
 
-def _mark_eastmoney_unavailable(channel: str, seconds: int = 300) -> None:
-    _eastmoney_unavailable_until[channel] = max(
-        _eastmoney_unavailable_until.get(channel, 0.0), time.time() + seconds
+def _mark_source_unavailable(channel: str, seconds: int = 300) -> None:
+    _source_unavailable_until[channel] = max(
+        _source_unavailable_until.get(channel, 0.0), time.time() + seconds
     )
 
 
-def _clear_eastmoney_unavailable(channel: str) -> None:
-    _eastmoney_unavailable_until[channel] = 0.0
+def _clear_source_unavailable(channel: str) -> None:
+    _source_unavailable_until[channel] = 0.0
 
 
-def _eastmoney_available(channel: str) -> bool:
-    return time.time() >= _eastmoney_unavailable_until.get(channel, 0.0)
+def _source_available(channel: str) -> bool:
+    return time.time() >= _source_unavailable_until.get(channel, 0.0)
 
 
 def _compact_stock_fetch_error(error: Exception) -> str:
@@ -129,20 +141,112 @@ def _take_stock_fetch_failures(timeframe: str) -> Optional[Dict[str, Any]]:
 
 
 def _fetch_stock_daily_tx(
-    ak: Any,
     symbol: str,
     start_date: str,
     end_date: str,
+    minimum_rows: int,
 ):
-    """调用 AKShare 腾讯日线并关闭其逐年份 tqdm，避免多线程输出破坏统一进度条。"""
-    tx_module = importlib.import_module("akshare.stock_feature.stock_hist_tx")
-    tx_module.get_tqdm = lambda: (lambda iterable, **_kwargs: iterable)
-    return ak.stock_zh_a_hist_tx(
-        symbol=symbol,
-        start_date=start_date,
-        end_date=end_date,
-        adjust="qfq",
-        timeout=15,
+    """按 AKShare stock_zh_a_hist_tx 的官方腾讯端点取最近数据，并为每次请求设置硬超时。"""
+    import pandas as pd
+    import requests
+
+    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+    lower_bound = datetime.strptime(start_date, "%Y%m%d")
+    cursor_end = min(datetime.strptime(end_date, "%Y%m%d"), datetime.now())
+    deadline = time.monotonic() + 25.0
+    frames: List[Any] = []
+    collected = 0
+    # 腾讯单次最多约 640 根；周线需要更多日线时按时间向前分页，最多 12 页。
+    for page in range(12):
+        if cursor_end < lower_bound or collected >= max(2, minimum_rows):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Tencent daily batch exceeded 25 seconds")
+        cursor_start = max(lower_bound, cursor_end - timedelta(days=900))
+        variable = f"kline_dayqfq{cursor_end.year}_{page}"
+        params = {
+            "_var": variable,
+            "param": (
+                f"{symbol},day,{cursor_start:%Y-%m-%d},"
+                f"{cursor_end:%Y-%m-%d},640,qfq"
+            ),
+            "r": "0.8205512681390605",
+        }
+        response = requests.get(
+            url,
+            params=params,
+            timeout=(min(4.0, remaining), min(8.0, remaining)),
+        )
+        response.raise_for_status()
+        payload_text = response.text[response.text.find("={") + 1:]
+        payload = json.loads(payload_text)
+        market_data = payload.get("data", {}).get(symbol, {})
+        rows = market_data.get("qfqday") or market_data.get("day") or []
+        parsed = [row[:6] for row in rows if isinstance(row, list) and len(row) >= 6]
+        if not parsed:
+            break
+        frame = pd.DataFrame(
+            parsed, columns=["date", "open", "close", "high", "low", "volume"]
+        )
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+        for column in ("open", "close", "high", "low", "volume"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame.dropna(subset=["date", "open", "close", "high", "low"])
+        frame = frame[
+            (frame["date"] >= cursor_start) & (frame["date"] <= cursor_end)
+        ]
+        if frame.empty:
+            break
+        frames.append(frame)
+        collected += len(frame)
+        cursor_end = frame["date"].min().to_pydatetime() - timedelta(days=1)
+    if not frames:
+        return pd.DataFrame(columns=["date", "open", "close", "high", "low", "volume"])
+    result = pd.concat(frames, ignore_index=True)
+    result = result.drop_duplicates(subset=["date"]).sort_values("date")
+    result = result[
+        (result["date"] >= lower_bound) &
+        (result["date"] <= datetime.strptime(end_date, "%Y%m%d"))
+    ]
+    return result.reset_index(drop=True)
+
+
+def _fetch_stock_minute_sina(symbol: str, period: str, limit: int):
+    """调用 AKShare 新浪分钟源的公开端点，并补上其封装缺少的硬超时。"""
+    import pandas as pd
+    import requests
+
+    url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData"
+    params = {
+        "symbol": symbol,
+        "scale": period,
+        "ma": "no",
+        "datalen": str(min(1970, max(60, int(limit)))),
+    }
+    response = requests.get(url, params=params, timeout=(4, 8))
+    response.raise_for_status()
+    marker = response.text.find("=([")
+    if marker < 0:
+        raise ValueError("Sina minute response has no JSONP payload")
+    payload_start = marker + 2
+    payload_end = response.text.rfind(");")
+    if payload_end <= payload_start:
+        raise ValueError("Sina minute response is incomplete")
+    rows = json.loads(response.text[payload_start:payload_end])
+    frame = pd.DataFrame(rows)
+    required = {"day", "open", "high", "low", "close", "volume"}
+    if frame.empty or not required.issubset(frame.columns):
+        return pd.DataFrame(columns=sorted(required))
+    frame = frame.rename(columns={"day": "time"})
+    frame["time"] = pd.to_datetime(frame["time"], errors="coerce")
+    for column in ("open", "high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return (
+        frame.dropna(subset=["time", "open", "high", "low", "close"])
+        .sort_values("time")
+        .tail(max(2, int(limit)))
+        .reset_index(drop=True)
     )
 
 
@@ -234,12 +338,15 @@ def select_stock_pool(
     try:
         frame = ak.stock_zh_a_spot_em()
     except Exception as exc:
-        _mark_eastmoney_unavailable("pool")
+        _mark_source_unavailable("eastmoney_pool")
+        # 同一网络环境下全市场端点已失败，本批日线直接走有硬超时的腾讯备用源。
+        _mark_source_unavailable("eastmoney_daily")
+        _mark_source_unavailable("eastmoney_minute")
         # 新浪快照没有行业字段；限定板块时不能悄悄扩大为全市场。
         if str(sector or "all").strip().lower() != "all":
             raise
         return _select_stock_pool_sina(count, metric, order, log, exc)
-    _clear_eastmoney_unavailable("pool")
+    _clear_source_unavailable("eastmoney_pool")
     required = {"代码", "名称", metric_column}
     if frame is None or not required.issubset(set(frame.columns)):
         missing = sorted(required - set(frame.columns if frame is not None else []))
@@ -363,7 +470,7 @@ def fetch_stock_ohlcv(
     start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
     try:
         if canonical_timeframe in {"1d", "1w"}:
-            if _eastmoney_available("daily"):
+            if _source_available("eastmoney_daily"):
                 try:
                     period = "weekly" if canonical_timeframe == "1w" else "daily"
                     frame = ak.stock_zh_a_hist(
@@ -372,6 +479,7 @@ def fetch_stock_ohlcv(
                         start_date=start_date,
                         end_date=end_date,
                         adjust="qfq",
+                        timeout=8,
                     )
                     result = _frame_to_ohlcv(
                         frame,
@@ -379,17 +487,26 @@ def fetch_stock_ohlcv(
                         limit,
                     )
                     if result is not None:
-                        _clear_eastmoney_unavailable("daily")
+                        _clear_source_unavailable("eastmoney_daily")
                         return result
                 except Exception:
-                    _mark_eastmoney_unavailable("daily")
+                    _mark_source_unavailable("eastmoney_daily")
 
             exchange = str(symbol).split(":", 1)[0].lower()
             if exchange not in {"sh", "sz"}:
                 return None
-            frame = _fetch_stock_daily_tx(
-                ak, f"{exchange}{code}", start_date, end_date
+            if not _source_available("tencent_daily"):
+                _record_stock_fetch_failure(
+                    canonical_timeframe, RuntimeError("Tencent daily circuit is open")
+                )
+                return None
+            required_daily_rows = (
+                max(limit * 6, 640) if canonical_timeframe == "1w" else max(limit, 60)
             )
+            frame = _fetch_stock_daily_tx(
+                f"{exchange}{code}", start_date, end_date, required_daily_rows
+            )
+            _clear_source_unavailable("tencent_daily")
             if canonical_timeframe == "1w" and frame is not None and len(frame):
                 frame = frame.copy()
                 frame["date"] = pd.to_datetime(frame["date"])
@@ -411,38 +528,62 @@ def fetch_stock_ohlcv(
         start_dt = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d 09:30:00")
         end_dt = datetime.now().strftime("%Y-%m-%d 15:00:00")
         ak_period = minute_periods[canonical_timeframe]
-        if not _eastmoney_available("minute"):
-            _record_stock_fetch_failure(
-                canonical_timeframe, RuntimeError("EastMoney minute circuit is open")
+        frame = None
+        if _source_available("eastmoney_minute"):
+            try:
+                frame = ak.stock_zh_a_hist_min_em(
+                    symbol=code,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    period=ak_period,
+                    adjust="qfq",
+                )
+                _clear_source_unavailable("eastmoney_minute")
+            except Exception:
+                _mark_source_unavailable("eastmoney_minute")
+        if frame is None or len(frame) == 0:
+            if not _source_available("sina_minute"):
+                _record_stock_fetch_failure(
+                    canonical_timeframe, RuntimeError("Sina minute circuit is open")
+                )
+                return None
+            exchange = str(symbol).split(":", 1)[0].lower()
+            raw_limit = limit * 4 if canonical_timeframe == "4h" else limit
+            frame = _fetch_stock_minute_sina(
+                f"{exchange}{code}", ak_period, raw_limit
             )
-            return None
-        frame = ak.stock_zh_a_hist_min_em(
-            symbol=code,
-            start_date=start_dt,
-            end_date=end_dt,
-            period=ak_period,
-            adjust="qfq",
-        )
-        _clear_eastmoney_unavailable("minute")
+            _clear_source_unavailable("sina_minute")
+            minute_mapping = {
+                "time": "time", "open": "open", "high": "high",
+                "low": "low", "close": "close",
+            }
+        else:
+            minute_mapping = {
+                "time": "时间", "open": "开盘", "high": "最高",
+                "low": "最低", "close": "收盘",
+            }
         if canonical_timeframe == "4h" and frame is not None and len(frame):
             frame = frame.copy()
-            frame["时间"] = pd.to_datetime(frame["时间"])
-            frame["_day"] = frame["时间"].dt.date
+            time_column = minute_mapping["time"]
+            frame[time_column] = pd.to_datetime(frame[time_column])
+            frame["_day"] = frame[time_column].dt.date
             frame = frame.groupby("_day", as_index=False).agg({
-                "时间": "last",
-                "开盘": "first",
-                "最高": "max",
-                "最低": "min",
-                "收盘": "last",
+                time_column: "last",
+                minute_mapping["open"]: "first",
+                minute_mapping["high"]: "max",
+                minute_mapping["low"]: "min",
+                minute_mapping["close"]: "last",
             })
         return _frame_to_ohlcv(
             frame,
-            {"time": "时间", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘"},
+            minute_mapping,
             limit,
         )
     except Exception as exc:
-        if canonical_timeframe in minute_periods:
-            _mark_eastmoney_unavailable("minute")
+        if canonical_timeframe in {"1d", "1w"}:
+            _mark_source_unavailable("tencent_daily")
+        elif canonical_timeframe in minute_periods:
+            _mark_source_unavailable("sina_minute")
         _record_stock_fetch_failure(canonical_timeframe, exc)
         return None
 

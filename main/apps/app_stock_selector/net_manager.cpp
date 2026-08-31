@@ -16,6 +16,11 @@
  * 修改时间：2026-08-29
  * 修改作用：SNTP 初始化和 RTC I2C 写入迁移到独立 6KB 栈任务；系统事件/TCPIP 回调只设置原子标志，
  *           避免联网数秒后因小栈溢出或跨线程 I2C 竞争重启。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：形态 POST 使用 60/75/90 秒的独立自适应读取超时，避免服务端完成全市场 NCC 后，
+ *           设备仍按普通接口 15 秒超时误报失败；详情与设置请求继续使用短超时。
+ * 使用方式：postJson("/api/v1/shape/match", ...) 自动采用匹配超时，无需调用方传参。
  */
 #include "net_manager.h"
 
@@ -320,7 +325,10 @@ bool NetManager::perform(
 
     const std::string url = _base_url + path;
     const int signal = WifiManager::GetInstance().GetRssi();
-    const int socket_timeout_ms = signal <= -80 ? 30000 : signal <= -70 ? 22000 : 15000;
+    const bool shape_match = method == HTTP_METHOD_POST && path == "/api/v1/shape/match";
+    const int socket_timeout_ms = shape_match
+        ? (signal <= -80 ? 90000 : signal <= -70 ? 75000 : 60000)
+        : (signal <= -80 ? 30000 : signal <= -70 ? 22000 : 15000);
     const int64_t started = esp_timer_get_time();
     esp_err_t result = ESP_FAIL;
     int status = -1;

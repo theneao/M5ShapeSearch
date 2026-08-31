@@ -46,6 +46,11 @@
 修改作用：按需请求可只补齐实际缺失的 A 股或 Crypto 桶；首次用户请求可越过一次旧失败退避，
           同一品类五分钟内去重，避免硬件轮询重复下载。
 使用方式：路由调用 ensure_timeframe(timeframe, categories=missing, user_requested=True)。
+
+修改时间：2026-08-31
+修改作用：目标周期首次建库且实时选池失败时，可复用任意已建 A 股周期的去重标的池；
+          不再要求该目标周期必须已有缓存，新浪快照偶发解析失败也能继续下载 K 线。
+使用方式：刷新线程自动注入跨周期 _fallback_stock_pool，无需页面或客户端改动。
 """
 from __future__ import annotations
 
@@ -606,9 +611,20 @@ class MarketDataService:
                 build_config = copy.deepcopy(config)
                 build_config["_refresh_categories"] = sorted(due_categories)
                 if "stock" in due_categories:
+                    fallback_symbols = self.manager.bucket_symbols("stock", timeframe)
+                    if not fallback_symbols:
+                        seen_symbols: set[str] = set()
+                        fallback_symbols = []
+                        for fallback_timeframe in VALID_TIMEFRAMES:
+                            for symbol, name in self.manager.bucket_symbols(
+                                "stock", fallback_timeframe
+                            ):
+                                if symbol not in seen_symbols:
+                                    seen_symbols.add(symbol)
+                                    fallback_symbols.append((symbol, name))
                     build_config["_fallback_stock_pool"] = [
                         {"symbol": symbol, "name": name}
-                        for symbol, name in self.manager.bucket_symbols("stock", timeframe)
+                        for symbol, name in fallback_symbols
                     ]
                 samples, report = build_market_dataset(
                     build_config, timeframe, self._append_log, progress

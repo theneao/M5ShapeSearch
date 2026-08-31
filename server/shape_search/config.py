@@ -5,6 +5,11 @@ CPU 形态搜索参数。
 创建时间：2026-08-28
 作用：集中保存规格 v0.1 中的查询、候选、ShapeDTW、融合和去重参数。
 使用方式：config = CpuSearchConfig(); CpuShapeSearchEngine(config)
+
+修改时间：2026-08-31
+修改作用：将转折点/ShapeDTW 精排上限收敛到 240/60，避免 600 标的查询超过硬件 HTTP 超时；
+          NCC 全市场召回和四项最终评分不变。
+使用方式：沿用 CpuSearchConfig() 默认值即可；需要离线评测时仍可显式覆盖候选上限。
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -24,8 +29,8 @@ class CpuSearchConfig:
 
     ncc_min_score: float = 0.55
     top_per_scale_per_series: int = 20
-    before_turning_point: int = 500
-    before_dtw: int = 150
+    before_turning_point: int = 240
+    before_dtw: int = 60
 
     turning_prominence: float = 0.25
     turning_time_weight: float = 0.35

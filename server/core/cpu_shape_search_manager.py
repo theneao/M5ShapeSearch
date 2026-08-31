@@ -20,6 +20,11 @@ CPU 连续序列形态搜索管理器。
 
 修改时间：2026-08-29
 修改作用：缓存桶增加 5m/15m/30m/60m，加载历史 NPZ 时把旧 1h 桶无损迁移为 60m。
+
+修改时间：2026-08-31
+修改作用：查询只在锁内截取不可变的引擎/序列快照，耗时的 NCC/ShapeDTW 在锁外执行；
+          后台行情提交和详情读取不再被整次匹配长期阻塞。
+使用方式：search() 调用方式不变，刷新期间继续搜索最后一份已提交缓存。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -310,17 +315,20 @@ class CpuShapeSearchManager:
             query_points = seq[:, :2].tolist()
 
         with self._lock:
-            candidates, diagnostics = self.engine.search(
-                query_points,
-                self.market_series,
-                category=category,
-                timeframe=timeframe,
-                top_k=top_k,
-                y_flip=False,
-                log=lambda message: print(message, flush=True),
-            )
+            engine = self.engine
+            market_snapshot = tuple(self.market_series)
+        candidates, diagnostics = engine.search(
+            query_points,
+            market_snapshot,
+            category=category,
+            timeframe=timeframe,
+            top_k=top_k,
+            y_flip=False,
+            log=lambda message: print(message, flush=True),
+        )
+        with self._lock:
             self.last_diagnostics = diagnostics
-            market_by_id = {market.series_id: market for market in self.market_series}
+        market_by_id = {market.series_id: market for market in market_snapshot}
         results: List[Dict[str, Any]] = []
         for rank, candidate in enumerate(candidates, start=1):
             market = market_by_id[candidate.series_id]

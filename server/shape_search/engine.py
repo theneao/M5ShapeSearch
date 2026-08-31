@@ -5,6 +5,11 @@ CPU-only 多阶段连续序列检索引擎。
 创建时间：2026-08-28
 作用：编排 Multi-scale NCC、Derivative NCC、Turning Point、Subsequence ShapeDTW 与 Interval NMS。
 使用方式：engine.search(sketch_points, market_series, category="all", timeframe="1d", top_k=20)
+
+修改时间：2026-08-31
+修改作用：大型市场搜索的 NCC 终端进度改为每 100 个序列输出一次，保留起止与阶段统计，
+          避免每次端侧手绘产生数十行调试日志。
+使用方式：search(..., log=回调) 时自动应用稀疏日志；算法与状态统计不受影响。
 """
 from __future__ import annotations
 import math
@@ -220,7 +225,7 @@ class CpuShapeSearchEngine:
         recalled: List[Candidate] = []
         for index, market in enumerate(selected_market, start=1):
             recalled.extend(self._recall_series(query, market))
-            if log and (index == len(selected_market) or index % 10 == 0):
+            if log and (index == len(selected_market) or index % 100 == 0):
                 log(
                     f"[CPU-SEARCH][NCC] series={index}/{len(selected_market)}，"
                     f"candidates={len(recalled)}"

@@ -10,6 +10,10 @@
  *
  * 修改时间：2026-08-30
  * 修改作用：轮询间隔改为遵守服务器 retry_after_seconds；DATA_UNAVAILABLE 立即结束等待并显示具体原因。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：匹配总超时延长为 75 秒并继续按信号质量放宽，覆盖服务端完整 NCC/ShapeDTW 计算；
+ *           数据建库等待仍单独计时且可取消，避免把正常计算误判为网络失败。
  */
 #include "shape_match_service.h"
 
@@ -23,7 +27,7 @@ namespace stock_selector {
 namespace {
 
 constexpr const char* kTag = "ShapeService";
-constexpr int64_t kMatchTimeoutUs = 30LL * 1000 * 1000;
+constexpr int64_t kMatchTimeoutUs = 75LL * 1000 * 1000;
 constexpr int64_t kDetailTimeoutUs = 20LL * 1000 * 1000;
 constexpr int64_t kDataBuildTimeoutUs = 15LL * 60 * 1000 * 1000;
 

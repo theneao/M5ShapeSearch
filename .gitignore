@@ -74,6 +74,7 @@ server/data/cpu_shape_search/*.npz
 server/data/cpu_shape_search/market_data_manifest.json
 server/data/cpu_shape_search/stock_sectors.json
 server/data/cpu_shape_search/*.tmp
+server/data/cpu_shape_search/*.partial
 server/data/cpu_shape_search/*.bak
 server/data/cpu_shape_search/market_data_config.json
 
