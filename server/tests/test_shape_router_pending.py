@@ -17,6 +17,9 @@
 
 修改时间：2026-08-30
 修改作用：验证路由把实际缺失品类传给按需下载服务，单选 A 股不会误排队 Crypto。
+
+修改时间：2026-08-31
+修改作用：验证硬件看板 compact 状态不会携带大体积日志、报告和 manifest，同时保留真实桶数量。
 """
 from __future__ import annotations
 
@@ -173,3 +176,31 @@ def test_stock_only_request_queues_only_stock(monkeypatch):
     assert response.status_code == 202
     assert payload["data"]["message"].isascii()
     assert service.queued == [("1d", ["stock"], True)]
+
+
+def test_market_data_status_compact_keeps_buckets_without_heavy_fields(monkeypatch):
+    class StatusService(_Service):
+        def status(self):
+            return {
+                "state": "ready",
+                "message": "ready",
+                "progress": 1.0,
+                "current_timeframe": "1d",
+                "buckets": {"stock_1d": 300, "crypto_1d": 298},
+                "last_kline_ts": {"stock_1d": 1772323200},
+                "logs": ["x" * 100_000],
+                "reports": {"stock": {"error": "y" * 100_000}},
+                "manifest": {"duplicate": "z" * 100_000},
+            }
+
+    monkeypatch.setattr(shape_router, "market_data_service", StatusService())
+
+    response = shape_router.api_market_data_status(compact=True)
+    data = response["data"]
+
+    assert data["buckets"] == {"stock_1d": 300, "crypto_1d": 298}
+    assert data["last_kline_ts"] == {"stock_1d": 1772323200}
+    assert "logs" not in data
+    assert "reports" not in data
+    assert "manifest" not in data
+    assert len(json.dumps(response)) < 1024

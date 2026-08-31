@@ -10,6 +10,9 @@
  * 修改时间：2026-08-29
  * 修改作用：移除手工时间/日期菜单，增加非线性动画档位和服务器数据看板。
  * 使用方式：联网后自动校时；Settings -> Motion 切换流畅/省电，Dashboard 查看各周期数量。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：设置页左滑检测改用 LVGL 已采样坐标，避免业务任务与 LVGL 并发读取 CST820/I2C 导致画面破损或重启。
  */
 #include "app_setup.h"
 #include <hal/hal.h>
@@ -119,20 +122,27 @@ void AppSetup::onRunning()
     const input::KeyEvent key_event = _key_manager ? _key_manager->update(false) : input::KeyEvent::None;
 
     bool swipe_left = false;
-    const Hal::TouchPoint touch = GetHAL().getTouchPoint();
-    if (touch.num > 0) {
-        if (!_touch_active) {
-            _touch_active = true;
-            _touch_start_x = touch.x;
-            _touch_start_y = touch.y;
+    {
+        LvglLockGuard touch_lock;
+        lv_indev_t* touchpad = GetHAL().lvTouchpad;
+        lv_point_t point{};
+        const bool pressed = touchpad != nullptr &&
+            lv_indev_get_state(touchpad) == LV_INDEV_STATE_PRESSED;
+        if (pressed) {
+            lv_indev_get_point(touchpad, &point);
+            if (!_touch_active) {
+                _touch_active = true;
+                _touch_start_x = point.x;
+                _touch_start_y = point.y;
+            }
+            _touch_last_x = point.x;
+            _touch_last_y = point.y;
+        } else if (_touch_active) {
+            const int dx = _touch_last_x - _touch_start_x;
+            const int dy = _touch_last_y - _touch_start_y;
+            swipe_left = dx <= -90 && std::abs(dy) <= 75;
+            _touch_active = false;
         }
-        _touch_last_x = touch.x;
-        _touch_last_y = touch.y;
-    } else if (_touch_active) {
-        const int dx = _touch_last_x - _touch_start_x;
-        const int dy = _touch_last_y - _touch_start_y;
-        swipe_left = dx <= -90 && std::abs(dy) <= 75;
-        _touch_active = false;
     }
 
     if (key_event == input::KeyEvent::GoHome) {

@@ -96,6 +96,7 @@ server/.gradio/
 # Local crash/core dumps produced while diagnosing device or native failures
 core.*
 *.dmp
+device_logs/
 
 sdkconfig
 sdkconfig.old

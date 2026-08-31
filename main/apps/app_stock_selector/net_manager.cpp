@@ -21,6 +21,10 @@
  * 修改作用：形态 POST 使用 60/75/90 秒的独立自适应读取超时，避免服务端完成全市场 NCC 后，
  *           设备仍按普通接口 15 秒超时误报失败；详情与设置请求继续使用短超时。
  * 使用方式：postJson("/api/v1/shape/match", ...) 自动采用匹配超时，无需调用方传参。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：保护活动 HTTP client 的发布、取消和 cleanup 生命周期，修复按返回取消恰逢请求结束时的 use-after-free 重启风险。
+ * 使用方式：调用 cancelCurrentRequest() 可安全打断后台请求；请求线程完成后再释放句柄。
  */
 #include "net_manager.h"
 
@@ -124,6 +128,8 @@ NetManager::NetManager()
 NetManager::~NetManager()
 {
     std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
+    _active_client.store(nullptr);
     if (_client != nullptr) {
         esp_http_client_cleanup(_client);
         _client = nullptr;
@@ -247,6 +253,7 @@ std::string NetManager::baseUrl() const
 void NetManager::setBaseUrl(const std::string& url, bool persist)
 {
     std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
     _base_url = trimTrailingSlash(url);
     if (persist) {
         Settings settings(kSettingsNamespace, true);
@@ -316,6 +323,8 @@ bool NetManager::perform(
     );
     if (!configured_url.empty() && configured_url != _base_url) {
         _base_url = configured_url;
+        std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
+        _active_client.store(nullptr);
         if (_client != nullptr) {
             esp_http_client_cleanup(_client);
             _client = nullptr;
@@ -355,12 +364,19 @@ bool NetManager::perform(
             esp_http_client_set_post_field(_client, nullptr, 0);
         }
 
-        _active_client.store(_client);
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
+            _active_client.store(_client);
+        }
         result = esp_http_client_perform(_client);
-        _active_client.store(nullptr);
-        status = esp_http_client_get_status_code(_client);
-        esp_http_client_cleanup(_client);
-        _client = nullptr;
+        {
+            // cancelCurrentRequest() 也持有此锁，因此句柄在取消调用返回前不会被释放。
+            std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
+            _active_client.store(nullptr);
+            status = esp_http_client_get_status_code(_client);
+            esp_http_client_cleanup(_client);
+            _client = nullptr;
+        }
 
         const bool retryable = !_response.overflow && attempt + 1 < attempts &&
             (result == ESP_ERR_HTTP_FETCH_HEADER || result == ESP_ERR_HTTP_CONNECT ||
@@ -405,6 +421,7 @@ bool NetManager::perform(
 
 bool NetManager::cancelCurrentRequest()
 {
+    std::lock_guard<std::mutex> lifecycle_lock(_client_lifecycle_mutex);
     esp_http_client_handle_t client = _active_client.load();
     if (client == nullptr) {
         return false;

@@ -31,6 +31,11 @@
 修改时间：2026-08-30
 修改作用：单选 A 股缺失时只排队下载 A 股桶，并允许用户请求有限度越过旧失败退避。
 使用方式：匹配请求中的 missing_categories 会原样传给市场数据服务。
+
+修改时间：2026-08-31
+修改作用：市场数据状态接口增加 compact 模式，只返回硬件看板需要的桶数量与进度，
+          避免历史行情错误、日志和 manifest 膨胀响应并耗尽 ESP32 内存。
+使用方式：硬件请求 GET /api/v1/market-data/status?compact=true；Web UI 省略参数仍取得完整状态。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -291,10 +296,23 @@ def api_market_data_update(
 
 
 @router.get("/market-data/status")
-def api_market_data_status():
+def api_market_data_status(
+    compact: bool = Query(False, description="仅返回硬件看板所需的紧凑状态"),
+):
     if market_data_service is None:
         raise HTTPException(503, "市场数据服务尚未初始化")
-    return {"code": 0, "data": market_data_service.status()}
+    status = market_data_service.status()
+    if compact:
+        message = str(status.get("message", ""))
+        status = {
+            "state": status.get("state", "unknown"),
+            "message": message[:160],
+            "progress": status.get("progress", 0.0),
+            "current_timeframe": status.get("current_timeframe", ""),
+            "buckets": status.get("buckets", {}),
+            "last_kline_ts": status.get("last_kline_ts", {}),
+        }
+    return {"code": 0, "data": status}
 
 
 @router.post("/market-data/refresh")

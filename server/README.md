@@ -66,7 +66,8 @@ python .\start_all.py
 ```http
 GET  /api/v1/market-data/config
 PUT  /api/v1/market-data/config?refresh=true
-GET  /api/v1/market-data/status              # 含 buckets 与 last_kline_ts 看板字段
+GET  /api/v1/market-data/status              # Web/调试完整状态
+GET  /api/v1/market-data/status?compact=true # 硬件看板紧凑状态（无日志/报告/manifest）
 POST /api/v1/market-data/refresh
 GET  /api/v1/market-data/sectors?refresh=true
 ```

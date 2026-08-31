@@ -8,6 +8,8 @@
  * 修改作用：HTTP 请求改用短连接，GET 响应头失败时在全新连接上重试一次。
  * 修改时间：2026-08-31
  * 修改作用：形态匹配 POST 使用独立的长读取超时，普通 GET/PUT 仍保持快速失败。
+ * 修改时间：2026-08-31
+ * 修改作用：用生命周期互斥锁保护活动 HTTP 句柄的取消与释放，消除返回/取消和请求完成同时发生时的悬空句柄竞争。
  */
 #pragma once
 
@@ -70,6 +72,7 @@ private:
     void ensureHttpClient(const std::string& url);
 
     mutable std::mutex _mutex;
+    mutable std::mutex _client_lifecycle_mutex;
     std::string _base_url;
     esp_http_client_handle_t _client = nullptr;
     std::atomic<esp_http_client_handle_t> _active_client{nullptr};

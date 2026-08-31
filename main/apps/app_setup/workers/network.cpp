@@ -6,6 +6,11 @@
  *
  * 修改时间：2026-08-29
  * 修改作用：配置热点明确为默认关闭；新增异步服务器看板，显示状态、进度及各周期 Stock/Crypto 数量。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：服务器看板改用 compact 状态接口，首次请求失败时用 -- 而不是误导性的全 0；
+ *           成功后若网络短暂失败则保留最后一次真实数量，并降低自动轮询频率。
+ * 使用方式：进入 Settings -> Server Dashboard；B 立即刷新，页面每 10 秒自动刷新一次。
  */
 #include "workers.h"
 
@@ -232,6 +237,7 @@ public:
     struct Snapshot {
         std::string state = "CONNECTING";
         std::string message;
+        bool has_data = false;
         int progress = 0;
         int total = 0;
         std::array<int, 7> stocks{};
@@ -278,7 +284,7 @@ private:
         const auto self = *holder;
         std::string response;
         std::string error;
-        if (!self->manager.get("/api/v1/market-data/status", response, error)) {
+        if (!self->manager.get("/api/v1/market-data/status?compact=true", response, error)) {
             self->setError(error.empty() ? "STATUS REQUEST FAILED" : error);
         } else {
             self->parse(response);
@@ -298,15 +304,20 @@ private:
         static constexpr const char* kTf[] = {"1d", "1w", "4h", "60m", "30m", "15m", "5m"};
         Snapshot next;
         JsonObjectConst data = document["data"];
+        JsonObjectConst buckets = data["buckets"];
+        if (data.isNull() || buckets.isNull()) {
+            setError("STATUS HAS NO BUCKET DATA");
+            return;
+        }
+        next.has_data = true;
         next.state = data["state"] | "unknown";
         next.message = data["message"] | "";
         next.progress = static_cast<int>((data["progress"] | 0.0f) * 100.0f + 0.5f);
-        JsonObjectConst buckets = data["buckets"];
         for (int index = 0; index < 7; ++index) {
             const std::string stock_key = std::string("stock_") + kTf[index];
             const std::string crypto_key = std::string("crypto_") + kTf[index];
-            next.stocks[index] = buckets[stock_key].is<int>() ? buckets[stock_key].as<int>() : 0;
-            next.cryptos[index] = buckets[crypto_key].is<int>() ? buckets[crypto_key].as<int>() : 0;
+            next.stocks[index] = buckets[stock_key] | 0;
+            next.cryptos[index] = buckets[crypto_key] | 0;
             next.total += next.stocks[index] + next.cryptos[index];
         }
         std::lock_guard<std::mutex> lock(_mutex);
@@ -359,12 +370,20 @@ public:
         _state->setText(text);
         _state->setTextColor(lv_color_hex(value.state == "ERROR" ? 0xFF667A :
                                           value.state == "refreshing" ? 0xFF8A34 : 0x31D0AA));
-        std::snprintf(text, sizeof(text), "TOTAL SERIES %d", value.total);
+        if (value.has_data) {
+            std::snprintf(text, sizeof(text), "TOTAL SERIES %d", value.total);
+        } else {
+            std::snprintf(text, sizeof(text), "TOTAL SERIES --");
+        }
         _total->setText(text);
         static constexpr const char* kTf[] = {"1D", "1W", "4H", "60M", "30M", "15M", "5M"};
         for (int index = 0; index < 7; ++index) {
-            std::snprintf(text, sizeof(text), "%s    STOCK %d    CRYPTO %d",
-                          kTf[index], value.stocks[index], value.cryptos[index]);
+            if (value.has_data) {
+                std::snprintf(text, sizeof(text), "%s    STOCK %d    CRYPTO %d",
+                              kTf[index], value.stocks[index], value.cryptos[index]);
+            } else {
+                std::snprintf(text, sizeof(text), "%s    STOCK --    CRYPTO --", kTf[index]);
+            }
             _rows[index]->setText(text);
         }
         _hint->setText(value.state == "ERROR" ? value.message.c_str() :
@@ -395,7 +414,7 @@ ServerDashboardWorker::ServerDashboardWorker()
     _dashboard = std::make_shared<DashboardContext>();
     _view = std::make_unique<DashboardView>();
     _dashboard->request();
-    _next_refresh_tick = GetHAL().millis() + 3000;
+    _next_refresh_tick = GetHAL().millis() + 10000;
 }
 
 void ServerDashboardWorker::update()
@@ -410,7 +429,7 @@ void ServerDashboardWorker::update()
     const uint32_t now = GetHAL().millis();
     if (now >= _next_refresh_tick) {
         _dashboard->request();
-        _next_refresh_tick = now + 3000;
+        _next_refresh_tick = now + 10000;
     }
 }
 
@@ -420,7 +439,7 @@ bool ServerDashboardWorker::handleKey(input::KeyEvent event)
         return false;
     }
     _dashboard->request();
-    _next_refresh_tick = GetHAL().millis() + 3000;
+    _next_refresh_tick = GetHAL().millis() + 10000;
     return true;
 }
 

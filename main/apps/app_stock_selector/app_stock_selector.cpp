@@ -12,6 +12,10 @@
  * 修改作用：详情页加载期间按 A/左滑会同时取消 HTTP 请求并立即返回结果页；
  *           不再要求先取消、再按一次返回，避免连续按键穿透多级页面并误关闭应用。
  * 使用方式：详情页任意状态按一次 A 或左滑即可返回；绘图首页 A 才退出应用。
+ *
+ * 修改时间：2026-08-31
+ * 修改作用：手势检测改读 LVGL 已采样的触控状态，不再与 LVGL 任务并发访问 CST820/I2C，修复匹配和页面操作期间的触控竞态重启风险。
+ * 使用方式：交互方式不变；左滑仍用于返回或取消。
  */
 #include "app_stock_selector.h"
 
@@ -72,21 +76,28 @@ void AppStockSelector::onRunning()
     const bool waiting_data = _service.state() == stock_selector::ShapeMatchService::State::WaitingData;
 
     bool swipe_left = false;
-    const Hal::TouchPoint touch = GetHAL().getTouchPoint();
-    if (touch.num > 0) {
-        if (!_touch_active) {
-            _touch_active = true;
-            _touch_start_x = touch.x;
-            _touch_start_y = touch.y;
+    {
+        LvglLockGuard touch_lock;
+        lv_indev_t* touchpad = GetHAL().lvTouchpad;
+        lv_point_t point{};
+        const bool pressed = touchpad != nullptr &&
+            lv_indev_get_state(touchpad) == LV_INDEV_STATE_PRESSED;
+        if (pressed) {
+            lv_indev_get_point(touchpad, &point);
+            if (!_touch_active) {
+                _touch_active = true;
+                _touch_start_x = point.x;
+                _touch_start_y = point.y;
+            }
+            _touch_last_x = point.x;
+            _touch_last_y = point.y;
+        } else if (_touch_active) {
+            const int dx = _touch_last_x - _touch_start_x;
+            const int dy = _touch_last_y - _touch_start_y;
+            swipe_left = dx <= -90 && std::abs(dy) <= 75 &&
+                (_service.isBusy() || (_view && _view->page() != stock_selector::StockSelectorView::Page::Draw));
+            _touch_active = false;
         }
-        _touch_last_x = touch.x;
-        _touch_last_y = touch.y;
-    } else if (_touch_active) {
-        const int dx = _touch_last_x - _touch_start_x;
-        const int dy = _touch_last_y - _touch_start_y;
-        swipe_left = dx <= -90 && std::abs(dy) <= 75 &&
-            (_service.isBusy() || (_view && _view->page() != stock_selector::StockSelectorView::Page::Draw));
-        _touch_active = false;
     }
 
     const bool back_or_cancel = event == input::KeyEvent::GoPrevious || swipe_left;
