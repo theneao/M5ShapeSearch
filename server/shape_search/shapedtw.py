@@ -5,6 +5,10 @@ Subsequence ShapeDTW 边界精排。
 创建时间：2026-08-28
 作用：以局部 level/derivative patch 为描述符，在扩展上下文中自动寻找匹配起止位置并保留 warping path。
 使用方式：subsequence_shapedtw(query, reference, config, expected_length=L)
+
+修改时间：2026-09-15
+修改作用：增加固定在参考序列末端结束的模式，供“最新 K 线窗口”手绘策略使用。
+使用方式：end_at_reference_end=True 时只在 reference 最后一项结束，起点仍由 ShapeDTW 对齐求解。
 """
 from __future__ import annotations
 from typing import List, Optional, Tuple
@@ -53,6 +57,7 @@ def subsequence_shapedtw(
     reference: np.ndarray,
     config: Optional[CpuSearchConfig] = None,
     expected_length: Optional[int] = None,
+    end_at_reference_end: bool = False,
 ) -> Tuple[float, int, int, List[Tuple[int, int]]]:
     """
     返回 (平均路径距离, start, end_exclusive, warping_path)。
@@ -122,13 +127,14 @@ def subsequence_shapedtw(
     max_duration = min(n, int(round(expected * (1.0 + cfg.warping_ratio))))
     valid_ends = []
     normalized_costs = []
-    for j in range(1, n + 1):
+    end_candidates = [n] if end_at_reference_end else range(1, n + 1)
+    for j in end_candidates:
         duration = j - int(start_at[m, j])
         if min_duration <= duration <= max_duration and path_len[m, j] > 0:
             valid_ends.append(j)
             normalized_costs.append(float(dp[m, j] / path_len[m, j]))
     if not valid_ends:
-        for j in range(1, n + 1):
+        for j in end_candidates:
             if path_len[m, j] > 0:
                 valid_ends.append(j)
                 normalized_costs.append(float(dp[m, j] / path_len[m, j]))

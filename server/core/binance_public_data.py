@@ -319,11 +319,11 @@ class BinancePublicClient:
             try:
                 if len(item) < 7 or int(item[6]) > now_ms:
                     continue
-                values = [float(item[index]) for index in (1, 2, 3, 4)]
+                values = [float(item[index]) for index in (1, 2, 3, 4, 5, 7)]
                 timestamp = int(item[0]) // 1000
             except (TypeError, ValueError, IndexError):
                 continue
-            if timestamp > 0 and np.isfinite(values).all() and min(values) > 0:
+            if timestamp > 0 and np.isfinite(values).all() and min(values[:4]) > 0:
                 rows.append([float(timestamp), *values])
         return np.asarray(rows[-int(limit):], dtype=np.float64) if len(rows) >= 2 else None
 

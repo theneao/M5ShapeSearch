@@ -36,6 +36,10 @@
 修改作用：市场数据状态接口增加 compact 模式，只返回硬件看板需要的桶数量与进度，
           避免历史行情错误、日志和 manifest 膨胀响应并耗尽 ESP32 内存。
 使用方式：硬件请求 GET /api/v1/market-data/status?compact=true；Web UI 省略参数仍取得完整状态。
+
+修改时间：2026-09-15
+修改作用：接入 Sequoia-X 预设策略、手绘策略持久化和多策略交集/并集筛选 API。
+使用方式：GET /strategies/catalog；POST /strategies/sketches；POST /strategies/screen。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -50,6 +54,7 @@ from fastapi.responses import JSONResponse
 
 from core import CpuShapeSearchManager, MarketDataService
 from core.market_data_service import normalize_timeframe
+from strategy import StrategyService
 
 
 router = APIRouter(prefix="/api/v1", tags=["形态匹配"])
@@ -57,12 +62,14 @@ router = APIRouter(prefix="/api/v1", tags=["形态匹配"])
 # 全局 CPU 搜索管理器（由 main.py 启动时初始化）
 index_manager: Optional[CpuShapeSearchManager] = None
 market_data_service: Optional[MarketDataService] = None
+strategy_service: Optional[StrategyService] = None
 
 
 def bind_index(mgr: CpuShapeSearchManager, data_service: Optional[MarketDataService] = None):
-    global index_manager, market_data_service
+    global index_manager, market_data_service, strategy_service
     index_manager = mgr
     market_data_service = data_service
+    strategy_service = StrategyService(mgr, mgr.data_dir)
 
 
 # ============================================================
@@ -109,6 +116,21 @@ class ShapeMatchResponse(BaseModel):
     code: int = 0
     msg: str = "ok"
     data: dict
+
+
+class SaveSketchStrategyRequest(BaseModel):
+    name: str = Field("", max_length=48)
+    points: List[Tuple[float, float]] = Field(..., min_length=3, max_length=2000)
+    threshold: float = Field(0.65, ge=0.0, le=1.0)
+    max_results: int = Field(60, ge=1, le=60)
+
+
+class StrategyScreenRequest(BaseModel):
+    strategy_ids: List[str] = Field(..., min_length=1, max_length=20)
+    combine: str = Field("intersection", pattern="^(intersection|union)$")
+    category: str = Field("stock", pattern="^(all|stock|crypto)$")
+    timeframe: str = Field("1d", pattern="^(5m|15m|30m|60m|1h|4h|1d|1w)$")
+    limit: int = Field(100, ge=1, le=200)
 
 
 # ============================================================
@@ -272,6 +294,113 @@ def api_index_status():
     if index_manager is None:
         return {"code": 0, "data": {"loaded": False}}
     return {"code": 0, "data": {"loaded": True, "buckets": index_manager.buckets_status()}}
+
+
+@router.get("/strategies/catalog")
+def api_strategy_catalog(
+    compact: bool = Query(False, description="省略手绘点，供内存受限硬件读取"),
+):
+    if strategy_service is None:
+        raise HTTPException(503, "策略服务尚未初始化")
+    return {"code": 0, "data": strategy_service.catalog(compact=compact)}
+
+
+@router.post("/strategies/sketches")
+def api_save_sketch_strategy(payload: SaveSketchStrategyRequest):
+    if strategy_service is None:
+        raise HTTPException(503, "策略服务尚未初始化")
+    try:
+        item = strategy_service.save_sketch(
+            payload.name,
+            payload.points,
+            payload.threshold,
+            payload.max_results,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"code": 0, "msg": "saved", "data": item}
+
+
+@router.delete("/strategies/sketches/{strategy_id}")
+def api_delete_sketch_strategy(strategy_id: str):
+    if strategy_service is None:
+        raise HTTPException(503, "策略服务尚未初始化")
+    if not strategy_service.delete_sketch(strategy_id):
+        raise HTTPException(404, f"未找到手绘策略: {strategy_id}")
+    return {"code": 0, "msg": "deleted", "data": {"id": strategy_id}}
+
+
+@router.post("/strategies/screen")
+def api_strategy_screen(payload: StrategyScreenRequest):
+    if strategy_service is None:
+        raise HTTPException(503, "策略服务尚未初始化")
+    timeframe = normalize_timeframe(payload.timeframe)
+    try:
+        ids, catalog = strategy_service.validate_request(
+            payload.strategy_ids, payload.combine, payload.category, timeframe
+        )
+        if payload.category == "all":
+            supports = [set(catalog[item]["category_support"]) for item in ids]
+            eligible = (
+                set.intersection(*supports)
+                if payload.combine == "intersection"
+                else set.union(*supports)
+            )
+            config = market_data_service.get_config() if market_data_service else {}
+            expected_categories = [
+                item for item in ("stock", "crypto")
+                if item in eligible and config.get(item, {}).get("enabled", True)
+            ]
+        else:
+            expected_categories = [payload.category]
+
+        if not expected_categories:
+            raise HTTPException(409, "所选策略对应的市场当前未启用")
+
+        buckets = index_manager.buckets_status() if index_manager is not None else {}
+        missing_categories = [
+            item for item in expected_categories
+            if buckets.get(f"{item}_{timeframe}", 0) <= 0
+        ]
+        available_categories = [
+            item for item in expected_categories
+            if buckets.get(f"{item}_{timeframe}", 0) > 0
+        ]
+        if not available_categories:
+            if market_data_service is None:
+                raise HTTPException(503, "市场数据服务尚未初始化")
+            queued = market_data_service.ensure_timeframe(
+                timeframe, categories=missing_categories, user_requested=True
+            )
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "code": 1001,
+                    "msg": "DATA_BUILDING",
+                    "data": {
+                        **queued,
+                        "category": payload.category,
+                        "missing_categories": missing_categories,
+                        "status_endpoint": "/api/v1/market-data/status",
+                    },
+                },
+            )
+        if missing_categories and market_data_service is not None:
+            market_data_service.ensure_timeframe(
+                timeframe, categories=missing_categories, user_requested=True
+            )
+        result = strategy_service.screen(
+            strategy_ids=ids,
+            combine=payload.combine,
+            category=payload.category,
+            timeframe=timeframe,
+            limit=payload.limit,
+        )
+        result["partial"] = bool(missing_categories)
+        result["missing_categories"] = missing_categories
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"code": 0, "msg": "ok", "data": result}
 
 
 @router.get("/market-data/config")

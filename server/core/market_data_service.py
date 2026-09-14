@@ -251,7 +251,7 @@ class MarketDataService:
         cache_source = str(self._manifest.get("data_source", "")).upper()
         cache_verified = (
             cache_source == "AKSHARE+BINANCE_PUBLIC"
-            and int(self._manifest.get("schema_version", 0)) >= 2
+            and int(self._manifest.get("schema_version", 0)) >= 3
             and bool(self._manifest.get("cache_committed", False))
         )
         loaded = self.manager.load_all(require_exist=False) if cache_verified else []
@@ -740,7 +740,7 @@ class MarketDataService:
                             f"{category}:{current[category]}" for category in active
                         )
                 self._manifest = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "data_source": "AKSHARE+BINANCE_PUBLIC",
                     "cache_committed": bool(
                         self._manifest.get("cache_committed", False)

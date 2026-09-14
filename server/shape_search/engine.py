@@ -10,6 +10,10 @@ CPU-only 多阶段连续序列检索引擎。
 修改作用：大型市场搜索的 NCC 终端进度改为每 100 个序列输出一次，保留起止与阶段统计，
           避免每次端侧手绘产生数十行调试日志。
 使用方式：search(..., log=回调) 时自动应用稀疏日志；算法与状态统计不受影响。
+
+修改时间：2026-09-15
+修改作用：增加 latest_only 搜索路径；每个尺度只比较以最新 K 线结束的窗口，ShapeDTW 也固定右边界。
+使用方式：保存的手绘预选策略调用 search(..., latest_only=True)；普通历史形态搜索保持默认 False。
 """
 from __future__ import annotations
 import math
@@ -46,6 +50,7 @@ class CpuShapeSearchEngine:
         self,
         query: QueryFeatures,
         market: MarketSeries,
+        latest_only: bool = False,
     ) -> List[Candidate]:
         cfg = self.config
         max_length = min(cfg.max_length, len(market.smooth_price))
@@ -55,22 +60,29 @@ class CpuShapeSearchEngine:
         candidates: List[Candidate] = []
         for length in lengths:
             query_price = z_normalize(resample_1d(query.normalized, length))
-            price_scores = sliding_ncc(query_price, market.smooth_price)
-            starts = select_local_peaks(
-                price_scores,
-                min_score=cfg.ncc_min_score,
-                min_distance=max(3, int(length * 0.25)),
-                top_k=cfg.top_per_scale_per_series,
-                ensure_one=cfg.ensure_one_candidate_per_scale,
-            )
             query_derivative = z_normalize(resample_1d(query.derivative, length))
+            if latest_only:
+                starts = np.asarray([len(market.smooth_price) - length], dtype=np.int64)
+                price_scores = None
+            else:
+                price_scores = sliding_ncc(query_price, market.smooth_price)
+                starts = select_local_peaks(
+                    price_scores,
+                    min_score=cfg.ncc_min_score,
+                    min_distance=max(3, int(length * 0.25)),
+                    top_k=cfg.top_per_scale_per_series,
+                    ensure_one=cfg.ensure_one_candidate_per_scale,
+                )
             for start_value in starts:
                 start = int(start_value)
                 end = start + length
                 segment = market.smooth_price[start:end]
                 segment_derivative = z_normalize(np.gradient(segment))
                 derivative_ncc = pair_ncc(query_derivative, segment_derivative)
-                price_ncc = float(price_scores[start])
+                price_ncc = (
+                    pair_ncc(query_price, segment)
+                    if latest_only else float(price_scores[start])
+                )
                 pre_score = 0.65 * price_ncc + 0.35 * derivative_ncc
                 candidates.append(Candidate(
                     series_id=market.series_id,
@@ -89,6 +101,7 @@ class CpuShapeSearchEngine:
         query: QueryFeatures,
         candidates: List[Candidate],
         market_by_id: Dict[str, MarketSeries],
+        latest_only: bool = False,
     ) -> List[Candidate]:
         cfg = self.config
         candidates.sort(key=lambda item: item.pre_score, reverse=True)
@@ -117,12 +130,14 @@ class CpuShapeSearchEngine:
         query: QueryFeatures,
         candidates: List[Candidate],
         market_by_id: Dict[str, MarketSeries],
+        *,
+        latest_only: bool = False,
     ) -> List[Candidate]:
         cfg = self.config
         completed: List[Candidate] = []
         for candidate in candidates:
             market = market_by_id[candidate.series_id]
-            pad = int(round(cfg.context_ratio * candidate.scale))
+            pad = 0 if latest_only else int(round(cfg.context_ratio * candidate.scale))
             left = max(0, candidate.coarse_start - pad)
             right = min(len(market.smooth_price), candidate.coarse_end + pad)
             context = z_normalize(market.smooth_price[left:right])
@@ -132,6 +147,7 @@ class CpuShapeSearchEngine:
                     context,
                     cfg,
                     expected_length=candidate.scale,
+                    end_at_reference_end=latest_only,
                 )
             except (ValueError, IndexError, FloatingPointError):
                 continue
@@ -207,6 +223,7 @@ class CpuShapeSearchEngine:
         top_k: int = 20,
         y_flip: bool = False,
         log: Optional[LogCallback] = None,
+        latest_only: bool = False,
     ) -> Tuple[List[Candidate], Dict[str, float]]:
         """执行完整 CPU 检索并返回候选及阶段计数/耗时。"""
         started = time.perf_counter()
@@ -219,19 +236,22 @@ class CpuShapeSearchEngine:
         if log:
             log(
                 f"[CPU-SEARCH][START] series={len(selected_market)}，timeframe={timeframe}，"
-                f"category={category}，scales={geometric_lengths(self.config.min_length, self.config.max_length, self.config.scale_ratio)}"
+                f"category={category}，latest_only={latest_only}，"
+                f"scales={geometric_lengths(self.config.min_length, self.config.max_length, self.config.scale_ratio)}"
             )
 
         recalled: List[Candidate] = []
         for index, market in enumerate(selected_market, start=1):
-            recalled.extend(self._recall_series(query, market))
+            recalled.extend(self._recall_series(query, market, latest_only=latest_only))
             if log and (index == len(selected_market) or index % 100 == 0):
                 log(
                     f"[CPU-SEARCH][NCC] series={index}/{len(selected_market)}，"
                     f"candidates={len(recalled)}"
                 )
         after_turning = self._apply_turning_stage(query, recalled, market_by_id)
-        after_dtw = self._apply_shapedtw_stage(query, after_turning, market_by_id)
+        after_dtw = self._apply_shapedtw_stage(
+            query, after_turning, market_by_id, latest_only=latest_only
+        )
         after_nms = self._scale_bonus_and_nms(after_dtw)
         final = after_nms[:max(1, int(top_k))]
         elapsed_ms = (time.perf_counter() - started) * 1000.0

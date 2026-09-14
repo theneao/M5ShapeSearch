@@ -66,6 +66,36 @@ void AppStockSelector::onOpen()
             _view->showError("Detail request queue is busy");
         }
     };
+    _view->onStrategyCatalogRequested = [this]() {
+        if (!_service.isNetworkConnected()) {
+            _view->showError("WiFi offline; open system Settings");
+            return;
+        }
+        if (!_service.submitStrategyCatalog()) {
+            _view->showError("Strategy request queue is busy");
+        }
+    };
+    _view->onStrategyScreenRequested = [this](
+        const std::vector<std::string>& ids,
+        bool intersection,
+        const std::string& category,
+        const std::string& timeframe
+    ) {
+        if (_service.submitStrategyScreen(ids, intersection, category, timeframe, 20)) {
+            _view->setBusy(true, "FILTERING ON SERVER");
+        } else {
+            _view->showError("Strategy request queue is busy");
+        }
+    };
+    _view->onSaveStrategyRequested = [this](
+        const std::vector<stock_selector::NormalizedPoint>& points
+    ) {
+        if (_service.submitSaveStrategy(points, 0.68f)) {
+            _view->setBusy(true, "SAVING ON SERVER");
+        } else {
+            _view->showError("Save request queue is busy");
+        }
+    };
 }
 
 void AppStockSelector::onRunning()
@@ -131,11 +161,18 @@ void AppStockSelector::onRunning()
         }
 
         std::vector<stock_selector::MatchResult> results;
+        std::vector<stock_selector::StrategyDefinition> strategies;
         int query_ms = 0;
         stock_selector::KlineDetail detail;
         std::string error;
         if (_service.takeMatchResults(results, query_ms)) {
             _view->showResults(results, query_ms);
+        } else if (_service.takeStrategyCatalog(strategies)) {
+            _view->setStrategies(strategies);
+        } else if (_service.takeStrategyResults(results, query_ms)) {
+            _view->showStrategyResults(results, query_ms);
+        } else if (_service.takeStrategySaved()) {
+            _view->showStrategySaved();
         } else if (_service.takeDetail(detail)) {
             _view->setDetail(detail);
         } else if (_service.takeError(error)) {

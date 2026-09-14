@@ -160,6 +160,8 @@ void StockSelectorView::destroyPage()
     _kline_chart.reset();
     _bindings.clear();
     _category_buttons.clear();
+    _strategy_buttons.clear();
+    _strategy_check_labels.clear();
     _network_label = nullptr;
     _wifi_icon = nullptr;
     _hint_label = nullptr;
@@ -169,6 +171,8 @@ void StockSelectorView::destroyPage()
     _toast = nullptr;
     _detail_state_label = nullptr;
     _zoom_label = nullptr;
+    _strategy_summary_label = nullptr;
+    _strategy_mode_button = nullptr;
     _timeframe_button = nullptr;
     if (_page != nullptr && lv_obj_is_valid(_page)) {
         lv_obj_delete(_page);
@@ -226,13 +230,82 @@ void StockSelectorView::createDrawPage(bool animate)
     );
     lv_obj_remove_flag(_hint_label, LV_OBJ_FLAG_CLICKABLE);
 
-    createButton(_page, "CLEAR", 82, 347, 104, 62, 0x263147, ActionClear);
-    createButton(_page, "MATCH ON SERVER", 194, 347, 190, 62, kAccent, ActionMatch);
+    createButton(_page, "FILTER", 28, 50, 68, 34, 0x1A2942, ActionOpenStrategies);
+    createButton(_page, "CLEAR", 58, 347, 84, 62, 0x263147, ActionClear);
+    createButton(_page, "SAVE", 150, 347, 82, 62, kBlue, ActionSaveStrategy);
+    createButton(_page, "MATCH", 240, 347, 166, 62, kAccent, ActionMatch);
 
     createLabel(_page, "KEY A: EXIT / CANCEL    KEY B: MATCH", &lv_font_montserrat_10, kMuted,
                 LV_ALIGN_BOTTOM_MID, 0, -36);
     if (animate) {
         animatePageIn(-56);
+    }
+}
+
+void StockSelectorView::createStrategiesPage(bool animate)
+{
+    destroyPage();
+    _current_page = Page::Strategies;
+    _page = lv_obj_create(_root);
+    lv_obj_set_size(_page, kScreenSize, kScreenSize);
+    baseObject(_page, kBackground);
+    lv_obj_remove_flag(_page, LV_OBJ_FLAG_SCROLLABLE);
+
+    createLabel(_page, "STRATEGY FILTER", &lv_font_montserrat_20, kText, LV_ALIGN_TOP_MID, 0, 22);
+    createLabel(_page, "TAP TO SELECT  |  KEY A: BACK  KEY B: RUN", &lv_font_montserrat_10,
+                kMuted, LV_ALIGN_TOP_MID, 0, 49);
+
+    lv_obj_t* list = lv_obj_create(_page);
+    lv_obj_set_pos(list, 66, 72);
+    lv_obj_set_size(list, 334, 278);
+    baseObject(list, kBackground);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_style_pad_bottom(list, 8, LV_PART_MAIN);
+
+    for (std::size_t index = 0; index < _strategies.size(); ++index) {
+        const auto& strategy = _strategies[index];
+        lv_obj_t* row = createButton(
+            list, "", 12, static_cast<int>(index) * 54, 286, 46,
+            strategy.selected ? 0x73451F : kPanel,
+            ActionToggleStrategy, static_cast<int>(index)
+        );
+        _strategy_buttons.push_back(row);
+        lv_obj_t* name = createLabel(
+            row, strategy.shortName.c_str(), &lv_font_montserrat_14, kText,
+            LV_ALIGN_LEFT_MID, 18, 0
+        );
+        lv_obj_set_width(name, 190);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        _strategy_check_labels.push_back(createLabel(
+            row, strategy.selected ? LV_SYMBOL_OK : "+", &lv_font_montserrat_16,
+            strategy.selected ? kGreen : kMuted, LV_ALIGN_RIGHT_MID, -18, 0
+        ));
+    }
+    if (_strategies.empty()) {
+        createLabel(list, "LOADING STRATEGIES", &lv_font_montserrat_16, kMuted,
+                    LV_ALIGN_CENTER, 0, 0);
+    }
+
+    _strategy_mode_button = createButton(
+        _page, _strategy_intersection ? "MODE: AND" : "MODE: OR",
+        88, 365, 132, 54, 0x263147, ActionCombine
+    );
+    createButton(_page, "RUN FILTER", 230, 365, 150, 54, kAccent, ActionRunStrategies);
+    char market[64] = {};
+    std::snprintf(market, sizeof(market), "%s  %s  |  %u SELECTED",
+                  _category.c_str(), _timeframe.c_str(),
+                  static_cast<unsigned>(std::count_if(
+                      _strategies.begin(), _strategies.end(),
+                      [](const StrategyDefinition& item) { return item.selected; }
+                  )));
+    _strategy_summary_label = createLabel(
+        _page, market, &lv_font_montserrat_10, kMuted, LV_ALIGN_BOTTOM_MID, 0, -22
+    );
+    if (animate) {
+        animatePageIn(64);
     }
 }
 
@@ -245,7 +318,8 @@ void StockSelectorView::createResultsPage(bool animate)
     baseObject(_page, kBackground);
     lv_obj_remove_flag(_page, LV_OBJ_FLAG_SCROLLABLE);
 
-    createLabel(_page, "TOP MATCHES", &lv_font_montserrat_20, kText, LV_ALIGN_TOP_MID, 0, 30);
+    createLabel(_page, _strategy_results_mode ? "STRATEGY HITS" : "TOP MATCHES",
+                &lv_font_montserrat_20, kText, LV_ALIGN_TOP_MID, 0, 30);
     char timing[40] = {};
     std::snprintf(timing, sizeof(timing), "%u hits  |  %d ms", static_cast<unsigned>(_results.size()), _query_ms);
     createLabel(_page, timing, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 60);
@@ -270,10 +344,15 @@ void StockSelectorView::createResultsPage(bool animate)
             static_cast<int>(index)
         );
         lv_obj_set_style_radius(card, 18, LV_PART_MAIN);
-        auto preview = std::make_unique<LinePreview>(card, _query_points, result.preview);
-        lv_obj_set_pos(preview->object(), 8, 8);
-        lv_obj_set_size(preview->object(), 104, 88);
-        _previews.push_back(std::move(preview));
+        if (!_strategy_results_mode) {
+            auto preview = std::make_unique<LinePreview>(card, _query_points, result.preview);
+            lv_obj_set_pos(preview->object(), 8, 8);
+            lv_obj_set_size(preview->object(), 104, 88);
+            _previews.push_back(std::move(preview));
+        } else {
+            createLabel(card, "RULE", &lv_font_montserrat_18, kBlue,
+                        LV_ALIGN_LEFT_MID, 25, 0);
+        }
 
         lv_obj_t* symbol = createLabel(card, result.symbol.c_str(), &lv_font_montserrat_14, kText,
                                        LV_ALIGN_TOP_LEFT, 121, 10);
@@ -284,8 +363,8 @@ void StockSelectorView::createResultsPage(bool animate)
                       result.matchScore * 100.0f);
         createLabel(card, score, &lv_font_montserrat_18, kAccent, LV_ALIGN_TOP_LEFT, 121, 37);
         char change[48] = {};
-        std::snprintf(change, sizeof(change), "%s %+.1f%% %dK", result.category.c_str(),
-                      result.changePct, result.rawBars);
+        std::snprintf(change, sizeof(change), _strategy_results_mode ? "%s %+.1f%% %d RULES" : "%s %+.1f%% %dK",
+                      result.category.c_str(), result.changePct, result.rawBars);
         createLabel(card, change, &lv_font_montserrat_14,
                     result.changePct >= 0 ? kGreen : kRed, LV_ALIGN_TOP_LEFT, 121, 72);
     }
@@ -326,14 +405,20 @@ void StockSelectorView::createDetailPage(bool animate)
     _detail_state_label = createLabel(_page, "LOADING KLINE FROM SERVER", &lv_font_montserrat_14, kMuted,
                                       LV_ALIGN_TOP_MID, 0, 120);
 
-    char explain_primary[64] = {};
-    std::snprintf(explain_primary, sizeof(explain_primary), "NCC %.2f   dNCC %.2f",
-                  _selected.details.priceNcc, _selected.details.derivativeNcc);
-    createLabel(_page, explain_primary, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 351);
-    char explain_secondary[64] = {};
-    std::snprintf(explain_secondary, sizeof(explain_secondary), "TURN %.2f   DTW %.2f",
-                  _selected.details.turningScore, _selected.details.shapeDtwScore);
-    createLabel(_page, explain_secondary, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 374);
+    if (_strategy_results_mode) {
+        char explain[64] = {};
+        std::snprintf(explain, sizeof(explain), "MATCHED %d SELECTED RULES", _selected.rawBars);
+        createLabel(_page, explain, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 361);
+    } else {
+        char explain_primary[64] = {};
+        std::snprintf(explain_primary, sizeof(explain_primary), "NCC %.2f   dNCC %.2f",
+                      _selected.details.priceNcc, _selected.details.derivativeNcc);
+        createLabel(_page, explain_primary, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 351);
+        char explain_secondary[64] = {};
+        std::snprintf(explain_secondary, sizeof(explain_secondary), "TURN %.2f   DTW %.2f",
+                      _selected.details.turningScore, _selected.details.shapeDtwScore);
+        createLabel(_page, explain_secondary, &lv_font_montserrat_14, kMuted, LV_ALIGN_TOP_MID, 0, 374);
+    }
     createButton(_page, "-", 130, 397, 64, 44, 0x243149, ActionZoomOut);
     _zoom_label = createLabel(_page, "ZOOM --/--", &lv_font_montserrat_14, kMuted,
                               LV_ALIGN_BOTTOM_MID, 0, -27);
@@ -360,6 +445,43 @@ void StockSelectorView::styleChipSelection()
     }
 }
 
+void StockSelectorView::updateStrategySelectionUi(int changedIndex)
+{
+    if (changedIndex >= 0 && changedIndex < static_cast<int>(_strategies.size()) &&
+        changedIndex < static_cast<int>(_strategy_buttons.size()) &&
+        changedIndex < static_cast<int>(_strategy_check_labels.size())) {
+        const bool selected = _strategies[changedIndex].selected;
+        lv_obj_set_style_bg_color(
+            _strategy_buttons[changedIndex],
+            lv_color_hex(selected ? 0x73451F : kPanel),
+            LV_PART_MAIN
+        );
+        lv_label_set_text(_strategy_check_labels[changedIndex], selected ? LV_SYMBOL_OK : "+");
+        lv_obj_set_style_text_color(
+            _strategy_check_labels[changedIndex],
+            lv_color_hex(selected ? kGreen : kMuted),
+            LV_PART_MAIN
+        );
+    }
+
+    if (_strategy_mode_button != nullptr) {
+        lv_obj_t* label = lv_obj_get_child(_strategy_mode_button, 0);
+        if (label != nullptr) {
+            lv_label_set_text(label, _strategy_intersection ? "MODE: AND" : "MODE: OR");
+        }
+    }
+    if (_strategy_summary_label != nullptr) {
+        char market[64] = {};
+        std::snprintf(market, sizeof(market), "%s  %s  |  %u SELECTED",
+                      _category.c_str(), _timeframe.c_str(),
+                      static_cast<unsigned>(std::count_if(
+                          _strategies.begin(), _strategies.end(),
+                          [](const StrategyDefinition& item) { return item.selected; }
+                      )));
+        lv_label_set_text(_strategy_summary_label, market);
+    }
+}
+
 void StockSelectorView::handleAction(Action action, int value)
 {
     switch (action) {
@@ -381,6 +503,52 @@ void StockSelectorView::handleAction(Action action, int value)
                 showError("Draw a curve first");
             }
             break;
+        case ActionSaveStrategy:
+            if (_draw_canvas && !_draw_canvas->empty() && !_busy) {
+                _query_points = _draw_canvas->normalizedPoints(128);
+                if (onSaveStrategyRequested) {
+                    onSaveStrategyRequested(_query_points);
+                }
+            } else if (!_busy) {
+                showError("Draw a curve first");
+            }
+            break;
+        case ActionOpenStrategies:
+            if (!_busy) {
+                createStrategiesPage(true);
+                setBusy(true, "LOADING STRATEGIES");
+                if (onStrategyCatalogRequested) {
+                    onStrategyCatalogRequested();
+                }
+            }
+            break;
+        case ActionToggleStrategy:
+            if (value >= 0 && value < static_cast<int>(_strategies.size())) {
+                _strategies[value].selected = !_strategies[value].selected;
+                updateStrategySelectionUi(value);
+            }
+            break;
+        case ActionCombine:
+            _strategy_intersection = !_strategy_intersection;
+            updateStrategySelectionUi();
+            break;
+        case ActionRunStrategies: {
+            if (_busy) {
+                break;
+            }
+            std::vector<std::string> ids;
+            for (const auto& strategy : _strategies) {
+                if (strategy.selected) {
+                    ids.push_back(strategy.id);
+                }
+            }
+            if (ids.empty()) {
+                showError("Select at least one strategy");
+            } else if (onStrategyScreenRequested) {
+                onStrategyScreenRequested(ids, _strategy_intersection, _category, _timeframe);
+            }
+            break;
+        }
         case ActionCategory:
             if (value >= 0 && value < kCategoryCount) {
                 _category = kCategories[value];
@@ -426,10 +594,33 @@ void StockSelectorView::handleAction(Action action, int value)
 
 void StockSelectorView::showResults(const std::vector<MatchResult>& results, int queryMs)
 {
+    _strategy_results_mode = false;
     _results = results;
     _query_ms = queryMs;
     _busy = false;
     createResultsPage(true);
+}
+
+void StockSelectorView::setStrategies(const std::vector<StrategyDefinition>& strategies)
+{
+    _strategies = strategies;
+    _busy = false;
+    createStrategiesPage(false);
+}
+
+void StockSelectorView::showStrategyResults(const std::vector<MatchResult>& results, int queryMs)
+{
+    _strategy_results_mode = true;
+    _results = results;
+    _query_ms = queryMs;
+    _busy = false;
+    createResultsPage(true);
+}
+
+void StockSelectorView::showStrategySaved()
+{
+    setBusy(false);
+    showToast("SKETCH STRATEGY SAVED", 0x17604E);
 }
 
 void StockSelectorView::setDetail(const KlineDetail& detail)
@@ -513,15 +704,20 @@ void StockSelectorView::showError(const std::string& message)
     const std::string display = asciiOrFallback(
         message, "SERVER DATA ERROR; CHECK NETWORK OR DATA STATUS"
     );
+    showToast(display, 0x6C2631);
+}
+
+void StockSelectorView::showToast(const std::string& message, uint32_t color)
+{
     if (_toast != nullptr) {
         lv_obj_delete(_toast);
     }
     _toast = lv_obj_create(_page);
     lv_obj_set_size(_toast, 236, 54);
     lv_obj_align(_toast, LV_ALIGN_BOTTOM_MID, 0, -32);
-    baseObject(_toast, 0x6C2631, 24);
+    baseObject(_toast, color, 24);
     lv_obj_set_style_bg_opa(_toast, LV_OPA_90, LV_PART_MAIN);
-    lv_obj_t* label = createLabel(_toast, display.c_str(), &lv_font_montserrat_14, kText,
+    lv_obj_t* label = createLabel(_toast, message.c_str(), &lv_font_montserrat_14, kText,
                                   LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_width(label, 206);
     lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
@@ -537,6 +733,14 @@ bool StockSelectorView::goBack()
         return true;
     }
     if (_current_page == Page::Results) {
+        if (_strategy_results_mode) {
+            createStrategiesPage(true);
+        } else {
+            createDrawPage(true);
+        }
+        return true;
+    }
+    if (_current_page == Page::Strategies) {
         createDrawPage(true);
         return true;
     }
@@ -550,6 +754,8 @@ void StockSelectorView::triggerPrimary()
     }
     if (_current_page == Page::Draw) {
         handleAction(ActionMatch, 0);
+    } else if (_current_page == Page::Strategies) {
+        handleAction(ActionRunStrategies, 0);
     } else if (_current_page == Page::Results) {
         if (!_results.empty()) {
             handleAction(ActionResult, 0);

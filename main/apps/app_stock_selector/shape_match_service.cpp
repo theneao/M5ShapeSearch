@@ -134,10 +134,79 @@ bool ShapeMatchService::submitDetail(const MatchResult& result, const std::strin
     return true;
 }
 
+bool ShapeMatchService::submitStrategyCatalog()
+{
+    if (_queue == nullptr || isBusy()) {
+        return false;
+    }
+    auto* request = new Request();
+    request->type = RequestType::StrategyCatalog;
+    request->generation = _generation.fetch_add(1) + 1;
+    if (xQueueSend(_queue, &request, 0) != pdTRUE) {
+        delete request;
+        return false;
+    }
+    _state.store(State::StrategyCatalogLoading);
+    _started_us.store(esp_timer_get_time());
+    return true;
+}
+
+bool ShapeMatchService::submitStrategyScreen(
+    const std::vector<std::string>& strategyIds,
+    bool intersection,
+    const std::string& category,
+    const std::string& timeframe,
+    int limit
+)
+{
+    if (_queue == nullptr || strategyIds.empty() || isBusy()) {
+        return false;
+    }
+    auto* request = new Request();
+    request->type = RequestType::StrategyScreen;
+    request->strategyIds = strategyIds;
+    request->intersection = intersection;
+    request->category = category;
+    request->timeframe = timeframe;
+    request->limit = std::clamp(limit, 1, 30);
+    request->generation = _generation.fetch_add(1) + 1;
+    if (xQueueSend(_queue, &request, 0) != pdTRUE) {
+        delete request;
+        return false;
+    }
+    _state.store(State::StrategyScreening);
+    _started_us.store(esp_timer_get_time());
+    return true;
+}
+
+bool ShapeMatchService::submitSaveStrategy(
+    const std::vector<NormalizedPoint>& points,
+    float threshold
+)
+{
+    if (_queue == nullptr || points.size() < 3 || isBusy()) {
+        return false;
+    }
+    auto* request = new Request();
+    request->type = RequestType::SaveStrategy;
+    request->points = points;
+    request->limit = static_cast<int>(std::clamp(threshold, 0.0f, 1.0f) * 1000.0f);
+    request->generation = _generation.fetch_add(1) + 1;
+    if (xQueueSend(_queue, &request, 0) != pdTRUE) {
+        delete request;
+        return false;
+    }
+    _state.store(State::StrategySaving);
+    _started_us.store(esp_timer_get_time());
+    return true;
+}
+
 bool ShapeMatchService::isBusy() const
 {
     const State value = _state.load();
-    return value == State::Matching || value == State::WaitingData || value == State::DetailLoading;
+    return value == State::Matching || value == State::WaitingData ||
+        value == State::StrategyCatalogLoading || value == State::StrategyScreening ||
+        value == State::StrategySaving || value == State::DetailLoading;
 }
 
 uint32_t ShapeMatchService::elapsedMs() const
@@ -168,11 +237,14 @@ bool ShapeMatchService::cancelCurrent(const std::string& reason)
 bool ShapeMatchService::pollTimeout()
 {
     const State value = _state.load();
-    if (value != State::Matching && value != State::WaitingData && value != State::DetailLoading) {
+    if (value != State::Matching && value != State::WaitingData &&
+        value != State::StrategyCatalogLoading && value != State::StrategyScreening &&
+        value != State::StrategySaving && value != State::DetailLoading) {
         return false;
     }
     int64_t limit = value == State::WaitingData ? kDataBuildTimeoutUs :
-        value == State::Matching ? kMatchTimeoutUs : kDetailTimeoutUs;
+        (value == State::Matching || value == State::StrategyScreening) ? kMatchTimeoutUs :
+        kDetailTimeoutUs;
     const int signal = _net.rssi();
     if (signal <= -80) {
         limit *= 2;
@@ -184,8 +256,8 @@ bool ShapeMatchService::pollTimeout()
         return cancelCurrent(
             value == State::WaitingData
                 ? "Data build timed out; retry later"
-                : value == State::Matching
-                ? "Match timed out; check WiFi/server"
+                : (value == State::Matching || value == State::StrategyScreening)
+                ? "Search timed out; check WiFi/server"
                 : "Kline timed out; check WiFi/server"
         );
     }
@@ -205,6 +277,38 @@ bool ShapeMatchService::takeMatchResults(std::vector<MatchResult>& results, int&
     std::lock_guard<std::mutex> lock(_result_mutex);
     results = _match_results;
     queryMs = _query_ms;
+    _state.store(State::Idle);
+    return true;
+}
+
+bool ShapeMatchService::takeStrategyCatalog(std::vector<StrategyDefinition>& strategies)
+{
+    if (_state.load() != State::StrategyCatalogReady) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(_result_mutex);
+    strategies = _strategies;
+    _state.store(State::Idle);
+    return true;
+}
+
+bool ShapeMatchService::takeStrategyResults(std::vector<MatchResult>& results, int& queryMs)
+{
+    if (_state.load() != State::StrategyReady) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(_result_mutex);
+    results = _match_results;
+    queryMs = _query_ms;
+    _state.store(State::Idle);
+    return true;
+}
+
+bool ShapeMatchService::takeStrategySaved()
+{
+    if (_state.load() != State::StrategySaved) {
+        return false;
+    }
     _state.store(State::Idle);
     return true;
 }
@@ -249,8 +353,14 @@ void ShapeMatchService::workerLoop()
         }
         if (request->type == RequestType::Match) {
             executeMatch(*request);
-        } else {
+        } else if (request->type == RequestType::Detail) {
             executeDetail(*request);
+        } else if (request->type == RequestType::StrategyCatalog) {
+            executeStrategyCatalog(*request);
+        } else if (request->type == RequestType::StrategyScreen) {
+            executeStrategyScreen(*request);
+        } else if (request->type == RequestType::SaveStrategy) {
+            executeSaveStrategy(*request);
         }
     }
     _worker = nullptr;
@@ -417,6 +527,156 @@ void ShapeMatchService::executeDetail(const Request& request)
     }
     _started_us.store(0);
     _state.store(State::DetailReady);
+}
+
+void ShapeMatchService::executeStrategyCatalog(const Request& request)
+{
+    std::string response;
+    std::string error;
+    if (!_net.get("/api/v1/strategies/catalog?compact=true", response, error)) {
+        setError(error, request.generation);
+        return;
+    }
+    JsonDocument payload;
+    const DeserializationError parse_error = deserializeJson(payload, response);
+    if (parse_error || payload["code"].as<int>() != 0) {
+        setError(parse_error ? std::string("Invalid strategy JSON: ") + parse_error.c_str()
+                             : "Server rejected strategy catalog", request.generation);
+        return;
+    }
+    std::vector<StrategyDefinition> parsed;
+    auto append_items = [&parsed](JsonArrayConst items) {
+        for (JsonObjectConst item : items) {
+            StrategyDefinition strategy;
+            strategy.id = item["id"] | "";
+            strategy.name = item["name"] | "";
+            strategy.shortName = item["short_name"] | "STRATEGY";
+            strategy.kind = item["kind"] | "preset";
+            if (!strategy.id.empty()) {
+                parsed.push_back(std::move(strategy));
+            }
+        }
+    };
+    append_items(payload["data"]["presets"].as<JsonArrayConst>());
+    append_items(payload["data"]["saved_sketches"].as<JsonArrayConst>());
+    if (request.generation != _generation.load()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(_result_mutex);
+        _strategies = std::move(parsed);
+    }
+    _started_us.store(0);
+    _state.store(State::StrategyCatalogReady);
+}
+
+void ShapeMatchService::executeStrategyScreen(const Request& request)
+{
+    JsonDocument document;
+    JsonArray ids = document["strategy_ids"].to<JsonArray>();
+    for (const auto& id : request.strategyIds) {
+        ids.add(id);
+    }
+    document["combine"] = request.intersection ? "intersection" : "union";
+    document["category"] = request.category;
+    document["timeframe"] = request.timeframe;
+    document["limit"] = request.limit;
+    std::string body;
+    serializeJson(document, body);
+    JsonDocument payload;
+    while (true) {
+        if (request.generation != _generation.load()) {
+            return;
+        }
+        std::string response;
+        std::string error;
+        if (!_net.postJson("/api/v1/strategies/screen", body, response, error)) {
+            setError(error, request.generation);
+            return;
+        }
+        payload.clear();
+        const DeserializationError parse_error = deserializeJson(payload, response);
+        if (parse_error) {
+            setError(std::string("Invalid screen JSON: ") + parse_error.c_str(), request.generation);
+            return;
+        }
+        if (payload["code"].as<int>() != 1001) {
+            break;
+        }
+        _state.store(State::WaitingData);
+        const int retry_seconds = std::clamp(
+            payload["data"]["retry_after_seconds"] | 15,
+            5,
+            300
+        );
+        for (int tick = 0; tick < retry_seconds * 10; ++tick) {
+            if (request.generation != _generation.load()) {
+                return;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+    if (payload["code"].as<int>() != 0) {
+        setError(payload["msg"] | "Strategy screen failed", request.generation);
+        return;
+    }
+    std::vector<MatchResult> parsed;
+    const JsonArrayConst items = payload["data"]["list"].as<JsonArrayConst>();
+    for (JsonObjectConst item : items) {
+        MatchResult result;
+        result.symbol = item["symbol"] | "";
+        result.name = item["name"] | "";
+        result.category = item["category"] | "";
+        result.currentPrice = jsonFloat(item["current_price"]);
+        result.changePct = jsonFloat(item["change_pct"]);
+        result.matchScore = jsonFloat(item["combined_score"]);
+        result.rawBars = item["coverage"] | 0;
+        parsed.push_back(std::move(result));
+    }
+    if (request.generation != _generation.load()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(_result_mutex);
+        _match_results = std::move(parsed);
+        _query_ms = payload["data"]["query_ms"] | 0;
+    }
+    _started_us.store(0);
+    _state.store(State::StrategyReady);
+}
+
+void ShapeMatchService::executeSaveStrategy(const Request& request)
+{
+    JsonDocument document;
+    document["name"] = "Watch sketch";
+    document["threshold"] = static_cast<float>(request.limit) / 1000.0f;
+    document["max_results"] = 60;
+    JsonArray points = document["points"].to<JsonArray>();
+    for (const auto& point : request.points) {
+        JsonArray pair = points.add<JsonArray>();
+        pair.add(point.x);
+        pair.add(point.y);
+    }
+    std::string body;
+    serializeJson(document, body);
+    std::string response;
+    std::string error;
+    if (!_net.postJson("/api/v1/strategies/sketches", body, response, error)) {
+        setError(error, request.generation);
+        return;
+    }
+    JsonDocument payload;
+    const DeserializationError parse_error = deserializeJson(payload, response);
+    if (parse_error || payload["code"].as<int>() != 0) {
+        setError(parse_error ? std::string("Invalid save JSON: ") + parse_error.c_str()
+                             : "Server rejected saved shape", request.generation);
+        return;
+    }
+    if (request.generation != _generation.load()) {
+        return;
+    }
+    _started_us.store(0);
+    _state.store(State::StrategySaved);
 }
 
 void ShapeMatchService::setError(const std::string& message, uint32_t generation)

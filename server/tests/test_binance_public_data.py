@@ -98,9 +98,9 @@ def test_select_crypto_pool_zero_means_all_and_supports_trade_count():
 def test_fetch_ohlcv_drops_current_unclosed_bar():
     now_ms = int(time.time() * 1000)
     payload = [
-        [now_ms - 300000, "10", "12", "9", "11", "1", now_ms - 240000],
-        [now_ms - 200000, "11", "13", "10", "12", "1", now_ms - 140000],
-        [now_ms - 100000, "12", "14", "11", "13", "1", now_ms + 100000],
+        [now_ms - 300000, "10", "12", "9", "11", "1", now_ms - 240000, "11"],
+        [now_ms - 200000, "11", "13", "10", "12", "1", now_ms - 140000, "12"],
+        [now_ms - 100000, "12", "14", "11", "13", "1", now_ms + 100000, "13"],
     ]
     session = FakeSession([FakeResponse(payload)])
     client = BinancePublicClient(session)
@@ -108,8 +108,10 @@ def test_fetch_ohlcv_drops_current_unclosed_bar():
     logs = []
     result = client.fetch_ohlcv("BINANCE:BTCUSDT", "60m", 10, logs.append)
     assert result is not None
-    assert result.shape == (2, 5)
+    assert result.shape == (2, 7)
     assert result[-1, 4] == 12.0
+    assert result[-1, 5] == 1.0
+    assert result[-1, 6] == 12.0
     assert session.calls[0][1]["interval"] == "1h"
     assert logs == []  # 正常逐请求/逐 K 线成功信息不再刷屏。
 

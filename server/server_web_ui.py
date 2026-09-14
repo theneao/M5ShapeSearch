@@ -37,6 +37,7 @@ import html
 import json
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
@@ -48,6 +49,7 @@ from PIL import Image, ImageDraw
 
 API_BASE = os.environ.get("SHAPE_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 _LAST_RESULTS: Dict[str, Dict[str, Any]] = {}
+_LAST_STRATEGY_RESULTS: Dict[str, Dict[str, Any]] = {}
 _RESULT_LOCK = threading.Lock()
 
 
@@ -295,6 +297,190 @@ def load_kline(selection: str, timeframe: str):
     return PlotData(type="plotly", plot=json.dumps(payload, ensure_ascii=False)), f"已加载 {len(bars)} 根 K 线"
 
 
+def _strategy_choices(catalog: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    all_choices: List[Tuple[str, str]] = []
+    saved_choices: List[Tuple[str, str]] = []
+    for item in catalog.get("presets", []):
+        label = f"{item.get('name')} · {item.get('description')}"
+        all_choices.append((label, str(item.get("id"))))
+    for item in catalog.get("saved_sketches", []):
+        label = f"手绘 · {item.get('name')} · 阈值 {float(item.get('threshold', 0.0)) * 100:.0f}%"
+        choice = (label, str(item.get("id")))
+        all_choices.append(choice)
+        saved_choices.append(choice)
+    return all_choices, saved_choices
+
+
+def load_strategy_catalog():
+    try:
+        catalog = _request("GET", "/api/v1/strategies/catalog?compact=true")
+        choices, saved_choices = _strategy_choices(catalog)
+        upstream = catalog.get("upstream", {})
+        status = (
+            f"已加载 {len(catalog.get('presets', []))} 个 Sequoia-X 量价策略和 "
+            f"{len(catalog.get('saved_sketches', []))} 个手绘策略。  \n"
+            f"上游固定版本：`{upstream.get('commit', '')[:12]}`"
+        )
+        return (
+            gr.update(choices=choices, value=[]),
+            gr.update(choices=saved_choices, value=None),
+            status,
+        )
+    except Exception as exc:
+        return gr.update(choices=[], value=[]), gr.update(choices=[], value=None), f"策略目录加载失败：{exc}"
+
+
+def save_sketch_strategy(sketch: Any, name: str, threshold: float):
+    points = _sketch_to_points(sketch)
+    if len(points) < 10:
+        return gr.update(), gr.update(), "请先画出完整曲线，再保存为策略。"
+    try:
+        saved = _request(
+            "POST",
+            "/api/v1/strategies/sketches",
+            json={
+                "name": name or "我的手绘形态",
+                "points": points,
+                "threshold": float(threshold),
+                "max_results": 60,
+            },
+        )
+        catalog = _request("GET", "/api/v1/strategies/catalog?compact=true")
+        choices, saved_choices = _strategy_choices(catalog)
+        return (
+            gr.update(choices=choices, value=[saved["id"]]),
+            gr.update(choices=saved_choices, value=saved["id"]),
+            f"已保存“{saved['name']}”。该策略只比较每个标的以最新 K 线结束的多尺度窗口。",
+        )
+    except Exception as exc:
+        return gr.update(), gr.update(), f"保存失败：{exc}"
+
+
+def delete_sketch_strategy(strategy_id: str):
+    if not strategy_id:
+        return gr.update(), gr.update(), "请选择要删除的手绘策略。"
+    try:
+        _request("DELETE", f"/api/v1/strategies/sketches/{strategy_id}")
+        catalog = _request("GET", "/api/v1/strategies/catalog?compact=true")
+        choices, saved_choices = _strategy_choices(catalog)
+        return (
+            gr.update(choices=choices, value=[]),
+            gr.update(choices=saved_choices, value=None),
+            "手绘策略已删除。",
+        )
+    except Exception as exc:
+        return gr.update(), gr.update(), f"删除失败：{exc}"
+
+
+def run_strategy_screen(
+    strategy_ids: List[str], combine: str, category: str, timeframe: str, limit: int
+):
+    if not strategy_ids:
+        return [], gr.update(choices=[], value=None), "请至少选择一个策略。"
+    request_payload = {
+        "strategy_ids": strategy_ids,
+        "combine": combine,
+        "category": category,
+        "timeframe": timeframe,
+        "limit": int(limit),
+    }
+    try:
+        deadline = time.monotonic() + 15 * 60
+        while True:
+            response = requests.post(
+                f"{API_BASE}/api/v1/strategies/screen",
+                timeout=90.0,
+                json=request_payload,
+            )
+            payload = response.json()
+            code = int(payload.get("code", 0)) if isinstance(payload, dict) else -1
+            if response.status_code < 300 and code == 0:
+                data = payload.get("data", {})
+                break
+            if response.status_code == 202 and code == 1001 and time.monotonic() < deadline:
+                retry = int(payload.get("data", {}).get("retry_after_seconds", 15))
+                time.sleep(max(5, min(retry, 60)))
+                continue
+            detail = payload.get("detail", payload.get("msg", payload)) if isinstance(payload, dict) else payload
+            raise RuntimeError(f"HTTP {response.status_code}: {detail}")
+    except Exception as exc:
+        return [], gr.update(choices=[], value=None), f"策略筛选失败：{exc}"
+
+    rows: List[List[Any]] = []
+    choices: List[str] = []
+    stored: Dict[str, Dict[str, Any]] = {}
+    for rank, item in enumerate(data.get("list", []), start=1):
+        symbol = str(item.get("symbol", "?"))
+        name = str(item.get("name", ""))
+        label = f"#{rank} {symbol} {name}".strip()
+        choices.append(label)
+        stored[label] = item
+        rows.append([
+            rank,
+            symbol,
+            name,
+            item.get("category", "?"),
+            item.get("current_price", 0.0),
+            f"{float(item.get('change_pct', 0.0)):+.2f}%",
+            f"{int(item.get('coverage', 0))}/{len(strategy_ids)}",
+            f"{float(item.get('combined_score', 0.0)) * 100:.1f}%",
+            "、".join(item.get("matched_strategy_names", [])),
+        ])
+    with _RESULT_LOCK:
+        _LAST_STRATEGY_RESULTS.clear()
+        _LAST_STRATEGY_RESULTS.update(stored)
+    unavailable = data.get("unavailable_series", {})
+    unavailable_text = "，".join(
+        f"{key}: {value} 条缺字段" for key, value in unavailable.items() if int(value) > 0
+    )
+    status = (
+        f"筛选完成：扫描 {int(data.get('evaluated_series', 0))} 个标的，命中 "
+        f"{int(data.get('total', 0))} 个，耗时 {int(data.get('query_ms', 0))} ms。"
+    )
+    if unavailable_text:
+        status += f" 真实字段不足：{unavailable_text}。"
+    return rows, gr.update(choices=choices, value=choices[0] if choices else None), status
+
+
+def load_strategy_kline(selection: str):
+    with _RESULT_LOCK:
+        item = dict(_LAST_STRATEGY_RESULTS.get(selection, {}))
+    if not item:
+        return None, "请先选择筛选结果。"
+    timeframe = str(item.get("timeframe", "1d"))
+    try:
+        data = _request(
+            "GET",
+            "/api/v1/market/kline",
+            timeout=20.0,
+            params={"symbol": item["symbol"], "tf": timeframe, "limit": 300},
+        )
+    except Exception as exc:
+        return None, f"K 线加载失败：{exc}"
+    bars = data.get("bars", [])
+    if not bars:
+        return None, "该标的没有可显示的 K 线。"
+    trace = {
+        "x": [bar["t"] for bar in bars],
+        "open": [bar["o"] for bar in bars],
+        "high": [bar["h"] for bar in bars],
+        "low": [bar["l"] for bar in bars],
+        "close": [bar["c"] for bar in bars],
+        "type": "candlestick",
+        "name": data.get("symbol", "K线"),
+    }
+    payload = {
+        "data": [trace],
+        "layout": {
+            "title": f"{data.get('symbol')} {data.get('name', '')} · {timeframe}",
+            "height": 520,
+            "xaxis": {"rangeslider": {"visible": True}},
+            "margin": {"l": 55, "r": 20, "t": 55, "b": 50},
+        },
+    }
+    return PlotData(type="plotly", plot=json.dumps(payload, ensure_ascii=False)), f"已加载 {len(bars)} 根 K 线"
+
+
 def config_values():
     try:
         config = _request("GET", "/api/v1/market-data/config")
@@ -535,6 +721,16 @@ def create_app() -> gr.Blocks:
                         match_button = gr.Button("开始服务端匹配", variant="primary")
                         cancel_button = gr.Button("取消等待", variant="stop")
                         clear_button = gr.Button("清空")
+                    with gr.Accordion("保存当前手绘为预选策略", open=False):
+                        with gr.Row():
+                            sketch_strategy_name = gr.Textbox(
+                                value="我的手绘形态", label="策略名称", max_lines=1
+                            )
+                            sketch_strategy_threshold = gr.Slider(
+                                0.40, 0.95, value=0.68, step=0.01, label="最低相似度"
+                            )
+                            save_sketch_button = gr.Button("保存策略", variant="secondary")
+                        sketch_strategy_status = gr.Markdown("")
                     match_status = gr.Markdown("")
                 with gr.Column(scale=6):
                     comparison = gr.Plot(label="对比图")
@@ -561,6 +757,85 @@ def create_app() -> gr.Blocks:
             )
             clear_button.click(lambda: None, outputs=sketch)
             detail_button.click(load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status])
+
+        with gr.Tab("策略筛选"):
+            gr.Markdown(
+                "### Sequoia-X 量价策略 + 保存的手绘形态\n"
+                "六个预设策略严格使用已缓存的真实 OHLCV/成交额；手绘策略只比较每个标的最新结束窗口。"
+                "多选后可取交集（同时满足）或并集（满足任一）。"
+            )
+            strategy_selector = gr.CheckboxGroup(
+                choices=[], label="选择策略", interactive=True
+            )
+            with gr.Row():
+                strategy_combine = gr.Radio(
+                    choices=[("交集：同时满足", "intersection"), ("并集：满足任一", "union")],
+                    value="intersection",
+                    label="组合方式",
+                )
+                strategy_category = gr.Radio(
+                    choices=[("A 股", "stock"), ("虚拟货币", "crypto"), ("全部", "all")],
+                    value="stock",
+                    label="市场",
+                )
+                strategy_timeframe = gr.Radio(
+                    ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+                    value="1d",
+                    label="周期",
+                )
+                strategy_limit = gr.Slider(1, 200, value=100, step=1, label="最多显示")
+            with gr.Row():
+                strategy_screen_button = gr.Button("开始服务端筛选", variant="primary")
+                strategy_cancel_button = gr.Button("停止页面等待", variant="stop")
+                strategy_refresh_button = gr.Button("刷新策略目录")
+            strategy_status = gr.Markdown("")
+            strategy_table = gr.Dataframe(
+                headers=[
+                    "Rank", "Symbol", "Name", "Category", "Price", "Change",
+                    "Coverage", "Score", "Matched Strategies",
+                ],
+                interactive=False,
+            )
+            with gr.Row():
+                strategy_selected = gr.Dropdown(label="查看筛选标的 K 线")
+                strategy_detail_button = gr.Button("加载 K 线详情")
+            strategy_detail_plot = gr.Plot(label="策略筛选结果 K 线")
+            strategy_detail_status = gr.Markdown("")
+            with gr.Accordion("管理手绘策略", open=False):
+                saved_strategy_selector = gr.Dropdown(choices=[], label="已保存的手绘策略")
+                delete_strategy_button = gr.Button("删除所选手绘策略", variant="stop")
+
+            catalog_outputs = [strategy_selector, saved_strategy_selector, strategy_status]
+            app.load(load_strategy_catalog, outputs=catalog_outputs)
+            strategy_refresh_button.click(load_strategy_catalog, outputs=catalog_outputs)
+            save_sketch_button.click(
+                save_sketch_strategy,
+                inputs=[sketch, sketch_strategy_name, sketch_strategy_threshold],
+                outputs=[strategy_selector, saved_strategy_selector, sketch_strategy_status],
+            )
+            delete_strategy_button.click(
+                delete_sketch_strategy,
+                inputs=[saved_strategy_selector],
+                outputs=[strategy_selector, saved_strategy_selector, strategy_status],
+            )
+            strategy_screen_event = strategy_screen_button.click(
+                run_strategy_screen,
+                inputs=[
+                    strategy_selector, strategy_combine, strategy_category,
+                    strategy_timeframe, strategy_limit,
+                ],
+                outputs=[strategy_table, strategy_selected, strategy_status],
+            )
+            strategy_cancel_button.click(
+                lambda: "已停止页面等待；服务器已排队的数据构建会继续完成。",
+                outputs=[strategy_status],
+                cancels=[strategy_screen_event],
+            )
+            strategy_detail_button.click(
+                load_strategy_kline,
+                inputs=[strategy_selected],
+                outputs=[strategy_detail_plot, strategy_detail_status],
+            )
         add_settings_tabs(app)
     return app
 

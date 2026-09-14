@@ -35,6 +35,12 @@ public:
         Matching,
         WaitingData,
         MatchReady,
+        StrategyCatalogLoading,
+        StrategyCatalogReady,
+        StrategyScreening,
+        StrategyReady,
+        StrategySaving,
+        StrategySaved,
         DetailLoading,
         DetailReady,
         Error,
@@ -56,6 +62,18 @@ public:
         int limit = 10
     );
     bool submitDetail(const MatchResult& result, const std::string& timeframe, int limit = 200);
+    bool submitStrategyCatalog();
+    bool submitStrategyScreen(
+        const std::vector<std::string>& strategyIds,
+        bool intersection,
+        const std::string& category,
+        const std::string& timeframe,
+        int limit = 20
+    );
+    bool submitSaveStrategy(
+        const std::vector<NormalizedPoint>& points,
+        float threshold = 0.68f
+    );
     bool cancelCurrent(const std::string& reason = "Request cancelled");
     bool pollTimeout();
     bool isBusy() const;
@@ -63,18 +81,23 @@ public:
 
     State state() const;
     bool takeMatchResults(std::vector<MatchResult>& results, int& queryMs);
+    bool takeStrategyCatalog(std::vector<StrategyDefinition>& strategies);
+    bool takeStrategyResults(std::vector<MatchResult>& results, int& queryMs);
+    bool takeStrategySaved();
     bool takeDetail(KlineDetail& detail);
     bool takeError(std::string& message);
 
 private:
-    enum class RequestType { Match, Detail, Stop };
+    enum class RequestType { Match, Detail, StrategyCatalog, StrategyScreen, SaveStrategy, Stop };
     struct Request {
         RequestType type = RequestType::Match;
         std::vector<NormalizedPoint> points;
+        std::vector<std::string> strategyIds;
         MatchResult selected;
         std::string category = "all";
         std::string timeframe = "1d";
         int limit = 10;
+        bool intersection = true;
         uint32_t generation = 0;
     };
 
@@ -82,6 +105,9 @@ private:
     void workerLoop();
     void executeMatch(const Request& request);
     void executeDetail(const Request& request);
+    void executeStrategyCatalog(const Request& request);
+    void executeStrategyScreen(const Request& request);
+    void executeSaveStrategy(const Request& request);
     void setError(const std::string& message, uint32_t generation = 0);
 
     NetManager _net;
@@ -92,6 +118,7 @@ private:
     std::atomic<int64_t> _started_us{0};
     mutable std::mutex _result_mutex;
     std::vector<MatchResult> _match_results;
+    std::vector<StrategyDefinition> _strategies;
     KlineDetail _detail;
     std::string _error;
     int _query_ms = 0;

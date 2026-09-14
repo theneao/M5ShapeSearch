@@ -23,7 +23,7 @@ namespace stock_selector {
 
 class StockSelectorView {
 public:
-    enum class Page { Draw, Results, Detail };
+    enum class Page { Draw, Strategies, Results, Detail };
 
     StockSelectorView() = default;
     ~StockSelectorView();
@@ -31,10 +31,17 @@ public:
     std::function<void(const std::vector<NormalizedPoint>&, const std::string&, const std::string&)>
         onMatchRequested;
     std::function<void(const MatchResult&, const std::string&)> onDetailRequested;
+    std::function<void()> onStrategyCatalogRequested;
+    std::function<void(const std::vector<std::string>&, bool, const std::string&, const std::string&)>
+        onStrategyScreenRequested;
+    std::function<void(const std::vector<NormalizedPoint>&)> onSaveStrategyRequested;
 
     void init(lv_obj_t* parent);
     void update(uint32_t now, const std::string& networkStatus, int rssi);
     void showResults(const std::vector<MatchResult>& results, int queryMs);
+    void setStrategies(const std::vector<StrategyDefinition>& strategies);
+    void showStrategyResults(const std::vector<MatchResult>& results, int queryMs);
+    void showStrategySaved();
     void setDetail(const KlineDetail& detail);
     void setBusy(bool busy, const char* text = "SEARCHING SERVER");
     void showError(const std::string& message);
@@ -53,6 +60,11 @@ private:
         ActionResult,
         ActionZoomOut,
         ActionZoomIn,
+        ActionOpenStrategies,
+        ActionToggleStrategy,
+        ActionCombine,
+        ActionRunStrategies,
+        ActionSaveStrategy,
     };
     struct ButtonBinding {
         StockSelectorView* view = nullptr;
@@ -64,6 +76,7 @@ private:
     void handleAction(Action action, int value);
     void createDrawPage(bool animate = true);
     void createResultsPage(bool animate = true);
+    void createStrategiesPage(bool animate = true);
     void createDetailPage(bool animate = true);
     void destroyPage();
     void animatePageIn(int fromX);
@@ -89,6 +102,8 @@ private:
         int y
     );
     void styleChipSelection();
+    void updateStrategySelectionUi(int changedIndex = -1);
+    void showToast(const std::string& message, uint32_t color);
     void updateBusyAnimation(uint32_t now);
     void updateZoomLabel();
     static std::string asciiOrFallback(const std::string& text, const std::string& fallback);
@@ -109,6 +124,10 @@ private:
     std::unique_ptr<KlineChart> _kline_chart;
     std::vector<std::unique_ptr<ButtonBinding>> _bindings;
     std::vector<lv_obj_t*> _category_buttons;
+    std::vector<lv_obj_t*> _strategy_buttons;
+    std::vector<lv_obj_t*> _strategy_check_labels;
+    lv_obj_t* _strategy_summary_label = nullptr;
+    lv_obj_t* _strategy_mode_button = nullptr;
     lv_obj_t* _timeframe_button = nullptr;
 
     Page _current_page = Page::Draw;
@@ -116,9 +135,12 @@ private:
     std::string _timeframe = "1d";
     std::vector<NormalizedPoint> _query_points;
     std::vector<MatchResult> _results;
+    std::vector<StrategyDefinition> _strategies;
     MatchResult _selected;
     int _query_ms = 0;
     bool _busy = false;
+    bool _strategy_results_mode = false;
+    bool _strategy_intersection = true;
     std::string _busy_text;
     uint32_t _busy_started = 0;
     uint32_t _last_busy_second = UINT32_MAX;

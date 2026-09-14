@@ -8,6 +8,10 @@ CPU 形态搜索数据结构。
 
 修改时间：2026-08-28
 修改作用：MarketSeries 可携带原始 OHLC，匹配计算仍只使用 close。
+
+修改时间：2026-09-15
+修改作用：MarketSeries 增加与 K 线严格对齐的成交量和成交额序列，供 Sequoia-X 预设策略执行真实量价条件。
+使用方式：缺少真实字段时保持 None/NaN，策略明确报告不可计算，不用估算值替代。
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -48,6 +52,8 @@ class MarketSeries:
     sample_id: int = 0
     close_price: float = 0.0
     ohlc_values: Optional[np.ndarray] = None
+    volume_values: Optional[np.ndarray] = None
+    turnover_values: Optional[np.ndarray] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

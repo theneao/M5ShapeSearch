@@ -18,6 +18,14 @@
 
 7860 统一页兼容 Gradio ImageEditor 的 PIL 与 NumPy 字典输出；`background`、`layers`、`composite` 数组均显式判空，不再参与 Python 布尔判断，绘制后可稳定转换为归一化轨迹。
 
+## 策略筛选
+
+- 预设规则固定对照 `sngyai/Sequoia-X` commit `444c0db69ff36b46ef2b22ab265051d60c16029d`，包含海龟突破、均线放量、高窄旗形、涨停洗盘、上升趋势跌停和 RPS90 突破。
+- 预设规则只在 A 股日线上运行，并严格读取真实 OHLCV/成交额。字段不存在时计入 `unavailable_series`，不估算成交额、不放宽条件。
+- 手绘曲线保存后复用现有多尺度 NCC + Turning Point + ShapeDTW 引擎，但仅比较每个标的“以最新 K 线结束”的窗口，避免把历史命中冒充当前信号。
+- 多选策略先独立生成命中集合，再执行集合交集或并集；交集表示全部策略同时命中，并集表示任一策略命中。
+- 旧 OHLC-only NPZ 缓存与 schema v3 不兼容，启动后会按现有市场配置重新拉取真实 volume/turnover；不使用虚构字段维持旧缓存可用。
+
 ## 快速启动
 
 ```powershell
@@ -71,6 +79,17 @@ GET  /api/v1/market-data/status?compact=true # 硬件看板紧凑状态（无日
 POST /api/v1/market-data/refresh
 GET  /api/v1/market-data/sectors?refresh=true
 ```
+
+### 策略接口
+
+```http
+GET    /api/v1/strategies/catalog?compact=true
+POST   /api/v1/strategies/sketches
+DELETE /api/v1/strategies/sketches/{strategy_id}
+POST   /api/v1/strategies/screen
+```
+
+`compact=true` 会省略保存策略的 128 个归一化点，供 ESP32 读取目录。筛选桶尚未准备好时返回 HTTP 202 / `DATA_BUILDING`，网页和手表可继续等待或取消本地等待；服务器建库任务不随客户端取消而中断。
 
 ## 设备接口
 
@@ -131,12 +150,13 @@ server/
 ├── main.py                          FastAPI 启动与 CPU 序列加载
 ├── start_all.py                     API + 统一 Web UI 及实时日志
 ├── server_web_ui.py                 7860 手绘、设置与运行看板
-├── routers/shape_router.py          匹配、K 线和市场数据配置接口
+├── routers/shape_router.py          匹配、策略、K 线和市场数据配置接口
 ├── core/cpu_shape_search_manager.py 连续序列持久化和搜索适配
 ├── core/akshare_data_builder.py     A股/Crypto 选池与连续 K 线构建协调
 ├── core/binance_public_data.py      Binance 公共行情、权重限速与失败退避
 ├── core/market_data_service.py      启动预加载、周期刷新和原子替换
 ├── shape_search/                    NCC、Turning Point、ShapeDTW 引擎
+├── strategy/                        Sequoia-X 预设、手绘持久化与集合筛选
 ├── data/cpu_shape_search/           连续行情 NPZ
 └── tests/                           算法与持久化测试
 ```

@@ -138,6 +138,8 @@ def build_market_series(
     sample_id: int = 0,
     close_price: float = 0.0,
     ohlc_values: Optional[np.ndarray] = None,
+    volume_values: Optional[np.ndarray] = None,
+    turnover_values: Optional[np.ndarray] = None,
     metadata: Optional[Dict[str, Any]] = None,
     config: Optional[CpuSearchConfig] = None,
 ) -> MarketSeries:
@@ -155,6 +157,18 @@ def build_market_series(
             raise ValueError("ohlc_values must be an Nx4 array aligned with close values")
         valid &= np.isfinite(raw_ohlc).all(axis=1)
         ohlc = raw_ohlc[valid]
+    volume = None
+    if volume_values is not None:
+        raw_volume = np.asarray(volume_values, dtype=np.float64).reshape(-1)
+        if len(raw_volume) != len(source):
+            raise ValueError("volume_values must align with source values")
+        volume = raw_volume[valid]
+    turnover = None
+    if turnover_values is not None:
+        raw_turnover = np.asarray(turnover_values, dtype=np.float64).reshape(-1)
+        if len(raw_turnover) != len(source):
+            raise ValueError("turnover_values must align with source values")
+        turnover = raw_turnover[valid]
     source = source[valid]
     ts = ts[valid]
     if len(source) < 3:
@@ -178,5 +192,7 @@ def build_market_series(
         sample_id=int(sample_id),
         close_price=float(close_price or source[-1]),
         ohlc_values=ohlc,
+        volume_values=volume,
+        turnover_values=turnover,
         metadata=dict(metadata or {}),
     )

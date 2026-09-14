@@ -334,8 +334,9 @@ bool NetManager::perform(
 
     const std::string url = _base_url + path;
     const int signal = WifiManager::GetInstance().GetRssi();
-    const bool shape_match = method == HTTP_METHOD_POST && path == "/api/v1/shape/match";
-    const int socket_timeout_ms = shape_match
+    const bool long_search = method == HTTP_METHOD_POST &&
+        (path == "/api/v1/shape/match" || path == "/api/v1/strategies/screen");
+    const int socket_timeout_ms = long_search
         ? (signal <= -80 ? 90000 : signal <= -70 ? 75000 : 60000)
         : (signal <= -80 ? 30000 : signal <= -70 ? 22000 : 15000);
     const int64_t started = esp_timer_get_time();

@@ -60,6 +60,8 @@ def _sample() -> ShapeSample:
         market_timestamps=list(range(1, 81)),
         close_series=close.tolist(),
         ohlc_series=np.column_stack([close, close + 1, close - 1, close]).tolist(),
+        volume_series=np.linspace(1000.0, 2000.0, len(close)).tolist(),
+        turnover_series=np.linspace(10_000_000.0, 20_000_000.0, len(close)).tolist(),
     )
 
 
@@ -125,7 +127,7 @@ def test_verified_hybrid_weekly_cache_loads(tmp_path, monkeypatch):
     assert writer.build_from_samples([_sample()], timeframe="1w") == 1
     (tmp_path / "market_data_manifest.json").write_text(
         json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "data_source": "AKSHARE+BINANCE_PUBLIC",
             "cache_committed": True,
             "period_tokens": {"1w": "test"},
@@ -138,6 +140,9 @@ def test_verified_hybrid_weekly_cache_loads(tmp_path, monkeypatch):
     service = MarketDataService(reader)
     assert service.start() == ["stock_1w"]
     assert service.status()["buckets"]["stock_1w"] == 1
+    snapshot = reader.market_snapshot("stock", "1w")
+    assert snapshot[0].volume_values[-1] == 2000.0
+    assert snapshot[0].turnover_values[-1] == 20_000_000.0
     service.update_config(
         {"adaptive_scale": False, "feature_window": 77, "fetch_bars": 160},
         refresh=False,

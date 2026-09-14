@@ -38,6 +38,14 @@ struct MatchResult {
     std::vector<NormalizedPoint> preview;
 };
 
+struct StrategyDefinition {
+    std::string id;
+    std::string name;
+    std::string shortName;
+    std::string kind;
+    bool selected = false;
+};
+
 struct KlineBar {
     int64_t timestamp = 0;
     float open   = 0.0f;

@@ -20,6 +20,9 @@
 
 修改时间：2026-08-31
 修改作用：验证硬件看板 compact 状态不会携带大体积日志、报告和 manifest，同时保留真实桶数量。
+
+修改时间：2026-09-15
+修改作用：验证策略目录紧凑响应及策略筛选缺失周期的按需建库协议。
 """
 from __future__ import annotations
 
@@ -204,3 +207,47 @@ def test_market_data_status_compact_keeps_buckets_without_heavy_fields(monkeypat
     assert "reports" not in data
     assert "manifest" not in data
     assert len(json.dumps(response)) < 1024
+
+
+def test_strategy_catalog_compact_omits_saved_points(monkeypatch):
+    class StrategyStub:
+        def catalog(self, compact=False):
+            item = {"id": "sketch_1", "points": [[0, 0], [1, 1]]}
+            if compact:
+                item.pop("points")
+            return {"presets": [], "saved_sketches": [item]}
+
+    monkeypatch.setattr(shape_router, "strategy_service", StrategyStub())
+
+    response = shape_router.api_strategy_catalog(compact=True)
+
+    assert "points" not in response["data"]["saved_sketches"][0]
+
+
+def test_strategy_screen_queues_required_stock_bucket(monkeypatch):
+    class StrategyStub:
+        def validate_request(self, ids, combine, category, timeframe):
+            return list(ids), {
+                "sequoia_turtle_trade": {
+                    "category_support": ["stock"],
+                }
+            }
+
+    service = _Service()
+    monkeypatch.setattr(shape_router, "strategy_service", StrategyStub())
+    monkeypatch.setattr(shape_router, "index_manager", _Manager({"stock_1d": 0}))
+    monkeypatch.setattr(shape_router, "market_data_service", service)
+    request = shape_router.StrategyScreenRequest(
+        strategy_ids=["sequoia_turtle_trade"],
+        combine="intersection",
+        category="all",
+        timeframe="1d",
+    )
+
+    response = shape_router.api_strategy_screen(request)
+    payload = json.loads(response.body)
+
+    assert response.status_code == 202
+    assert payload["code"] == 1001
+    assert payload["data"]["missing_categories"] == ["stock"]
+    assert service.queued == [("1d", ["stock"], True)]

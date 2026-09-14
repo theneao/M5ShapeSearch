@@ -47,6 +47,10 @@ AKShare A 股 + Binance Public Crypto 市场数据构建器。
           备用源也独立熔断，正常公网可访问时无需系统代理或虚拟网卡。
 使用方式：5m/15m/30m/60m/4h 构建自动切源；4h 继续由 60m 数据按交易日聚合。
 
+修改时间：2026-09-15
+修改作用：行情数组从 OHLC 扩展为 OHLCV+turnover；只采集数据源真实字段，缺失成交额保持 NaN，供预设策略准确判断可计算性。
+使用方式：返回列固定为 [ts, open, high, low, close, volume, turnover]。
+
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -431,7 +435,7 @@ def inspect_crypto_pool(
 def _frame_to_ohlcv(frame: Any, mapping: Dict[str, str], limit: int) -> Optional[np.ndarray]:
     if frame is None or len(frame) == 0:
         return None
-    required = set(mapping.values())
+    required = {mapping[key] for key in ("time", "open", "high", "low", "close")}
     if not required.issubset(set(frame.columns)):
         return None
     frame = frame.copy().sort_values(mapping["time"]).tail(max(2, int(limit))).reset_index(drop=True)
@@ -441,10 +445,15 @@ def _frame_to_ohlcv(frame: Any, mapping: Dict[str, str], limit: int) -> Optional
             value = row[mapping["time"]]
             timestamp = float(datetime.fromisoformat(str(value).replace("/", "-")).timestamp())
             ohlc = [float(row[mapping[key]]) for key in ("open", "high", "low", "close")]
+            volume = float(row[mapping["volume"]]) if mapping.get("volume") in frame.columns else np.nan
+            turnover = (
+                float(row[mapping["turnover"]])
+                if mapping.get("turnover") in frame.columns else np.nan
+            )
         except (TypeError, ValueError, OverflowError):
             continue
         if np.isfinite([timestamp, *ohlc]).all() and min(ohlc) > 0:
-            rows.append([timestamp, *ohlc])
+            rows.append([timestamp, *ohlc, volume, turnover])
     return np.asarray(rows, dtype=np.float64) if len(rows) >= 2 else None
 
 
@@ -483,7 +492,10 @@ def fetch_stock_ohlcv(
                     )
                     result = _frame_to_ohlcv(
                         frame,
-                        {"time": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘"},
+                        {
+                            "time": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘",
+                            "volume": "成交量", "turnover": "成交额",
+                        },
                         limit,
                     )
                     if result is not None:
@@ -513,13 +525,22 @@ def fetch_stock_ohlcv(
                 frame = (
                     frame.set_index("date")
                     .resample("W-FRI")
-                    .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                    .agg({
+                        "open": "first",
+                        "high": "max",
+                        "low": "min",
+                        "close": "last",
+                        "volume": "sum",
+                    })
                     .dropna()
                     .reset_index()
                 )
             return _frame_to_ohlcv(
                 frame,
-                {"time": "date", "open": "open", "high": "high", "low": "low", "close": "close"},
+                {
+                    "time": "date", "open": "open", "high": "high", "low": "low", "close": "close",
+                    "volume": "volume",
+                },
                 limit,
             )
 
@@ -556,11 +577,13 @@ def fetch_stock_ohlcv(
             minute_mapping = {
                 "time": "time", "open": "open", "high": "high",
                 "low": "low", "close": "close",
+                "volume": "volume",
             }
         else:
             minute_mapping = {
                 "time": "时间", "open": "开盘", "high": "最高",
                 "low": "最低", "close": "收盘",
+                "volume": "成交量", "turnover": "成交额",
             }
         if canonical_timeframe == "4h" and frame is not None and len(frame):
             frame = frame.copy()
@@ -573,6 +596,13 @@ def fetch_stock_ohlcv(
                 minute_mapping["high"]: "max",
                 minute_mapping["low"]: "min",
                 minute_mapping["close"]: "last",
+                minute_mapping["volume"]: "sum",
+                **(
+                    {minute_mapping["turnover"]: "sum"}
+                    if "turnover" in minute_mapping
+                    and minute_mapping["turnover"] in frame.columns
+                    else {}
+                ),
             })
         return _frame_to_ohlcv(
             frame,

@@ -8,6 +8,7 @@
 修改记录：
 - 2026-08-28：ShapeSample 增加可选连续 close/timestamp 字段，供 CPU 多尺度子序列搜索使用。
 - 2026-08-28：增加可选 OHLC 连续序列，供硬件端按标的查看真实 K 线详情。
+- 2026-09-15：增加可选成交量/成交额连续序列，供预设量价策略使用。
 使用方式：真实市场样本填充 close_series/market_timestamps；旧 MOCK 构造方式保持兼容。
 
 支持的形态大类（10类，可覆盖金融市场 90% 以上常见形态）：
@@ -66,6 +67,8 @@ class ShapeSample:
     market_timestamps: Optional[List[int]] = None
     close_series: Optional[List[float]] = None
     ohlc_series: Optional[List[List[float]]] = None
+    volume_series: Optional[List[float]] = None
+    turnover_series: Optional[List[float]] = None
 
 
 def _add_noise(y: np.ndarray, noise_std: float) -> np.ndarray:

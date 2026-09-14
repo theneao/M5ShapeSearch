@@ -12,6 +12,7 @@
 - 2026-08-28：支持各品类独立数量、每标的最新 K 线数量，以及所有窗口结束于最新 K 线的自适应尺度。
 - 2026-08-28：真实样本保留连续 close/timestamp，供 CPU Multi-scale NCC 在查询时搜索任意子序列。
 - 2026-08-28：真实样本同步保留 OHLC，供硬件端结果详情页绘制真实蜡烛图。
+- 2026-09-15：真实样本同步保留 volume/turnover，供 Sequoia-X 量价预设策略使用；缺失字段保持 NaN。
 
 调用方式（外部统一入口）：
     from core.real_data_builder import build_dataset_from_symbol_pool
@@ -267,6 +268,14 @@ def _slice_ohlcv_to_samples(
             market_timestamps=timestamps[start:start + window].astype(np.int64).tolist(),
             close_series=seg.astype(float).tolist(),
             ohlc_series=ohlcv[start:start + window, 1:5].astype(float).tolist(),
+            volume_series=(
+                ohlcv[start:start + window, 5].astype(float).tolist()
+                if ohlcv.shape[1] > 5 else None
+            ),
+            turnover_series=(
+                ohlcv[start:start + window, 6].astype(float).tolist()
+                if ohlcv.shape[1] > 6 else None
+            ),
         ))
         sid += 1
     return samples
@@ -343,6 +352,14 @@ def _latest_ohlcv_to_samples(
             market_timestamps=timestamps[-raw_length:].astype(np.int64).tolist(),
             close_series=seg.astype(float).tolist(),
             ohlc_series=ohlcv[-raw_length:, 1:5].astype(float).tolist(),
+            volume_series=(
+                ohlcv[-raw_length:, 5].astype(float).tolist()
+                if ohlcv.shape[1] > 5 else None
+            ),
+            turnover_series=(
+                ohlcv[-raw_length:, 6].astype(float).tolist()
+                if ohlcv.shape[1] > 6 else None
+            ),
         ))
         sid += 1
     return samples

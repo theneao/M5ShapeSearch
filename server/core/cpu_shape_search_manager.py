@@ -25,6 +25,10 @@ CPU 连续序列形态搜索管理器。
 修改作用：查询只在锁内截取不可变的引擎/序列快照，耗时的 NCC/ShapeDTW 在锁外执行；
           后台行情提交和详情读取不再被整次匹配长期阻塞。
 使用方式：search() 调用方式不变，刷新期间继续搜索最后一份已提交缓存。
+
+修改时间：2026-09-15
+修改作用：连续序列缓存持久化真实 volume/turnover，并向策略引擎提供只读快照；K 线详情返回真实成交量。
+使用方式：market_snapshot() 供服务器策略服务读取；旧 NPZ 缺失量价字段时按 NaN 识别，不生成估算值。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -98,6 +102,8 @@ class CpuShapeSearchManager:
         close_series = getattr(sample, "close_series", None)
         market_timestamps = getattr(sample, "market_timestamps", None)
         ohlc_series = getattr(sample, "ohlc_series", None)
+        volume_series = getattr(sample, "volume_series", None)
+        turnover_series = getattr(sample, "turnover_series", None)
         values_are_prices = bool(close_series)
         if close_series:
             values = np.asarray(close_series, dtype=np.float64)
@@ -127,6 +133,8 @@ class CpuShapeSearchManager:
                 sample_id=sample.sample_id,
                 close_price=sample.close_price,
                 ohlc_values=np.asarray(ohlc_series, dtype=np.float64) if ohlc_series else None,
+                volume_values=np.asarray(volume_series, dtype=np.float64) if volume_series else None,
+                turnover_values=np.asarray(turnover_series, dtype=np.float64) if turnover_series else None,
                 metadata={
                     "shape_type": sample.shape_type,
                     "change_pct": float(sample.change_pct),
@@ -202,6 +210,8 @@ class CpuShapeSearchManager:
             all_values = []
             all_timestamps = []
             all_ohlc = []
+            all_volume = []
+            all_turnover = []
             for market in self.market_series:
                 values = np.asarray(market.source_values, dtype=np.float64)
                 timestamps = np.asarray(market.timestamps, dtype=np.int64)
@@ -211,6 +221,16 @@ class CpuShapeSearchManager:
                     all_ohlc.append(np.asarray(market.ohlc_values, dtype=np.float64))
                 else:
                     all_ohlc.append(np.full((len(values), 4), np.nan, dtype=np.float64))
+                all_volume.append(
+                    np.asarray(market.volume_values, dtype=np.float64)
+                    if market.volume_values is not None and len(market.volume_values) == len(values)
+                    else np.full(len(values), np.nan, dtype=np.float64)
+                )
+                all_turnover.append(
+                    np.asarray(market.turnover_values, dtype=np.float64)
+                    if market.turnover_values is not None and len(market.turnover_values) == len(values)
+                    else np.full(len(values), np.nan, dtype=np.float64)
+                )
                 offsets.append(offsets[-1] + len(values))
                 metadata.append({
                     "series_id": market.series_id,
@@ -229,6 +249,8 @@ class CpuShapeSearchManager:
                 values=np.concatenate(all_values).astype(np.float64),
                 timestamps=np.concatenate(all_timestamps).astype(np.int64),
                 ohlc=np.concatenate(all_ohlc).astype(np.float64),
+                volume=np.concatenate(all_volume).astype(np.float64),
+                turnover=np.concatenate(all_turnover).astype(np.float64),
             )
 
     def load_all(self, require_exist: bool = False) -> List[str]:
@@ -245,6 +267,14 @@ class CpuShapeSearchManager:
             stored_ohlc = (
                 np.asarray(payload["ohlc"], dtype=np.float64)
                 if "ohlc" in payload.files else None
+            )
+            stored_volume = (
+                np.asarray(payload["volume"], dtype=np.float64)
+                if "volume" in payload.files else None
+            )
+            stored_turnover = (
+                np.asarray(payload["turnover"], dtype=np.float64)
+                if "turnover" in payload.files else None
             )
 
         loaded: List[MarketSeries] = []
@@ -273,6 +303,8 @@ class CpuShapeSearchManager:
                     and np.isfinite(stored_ohlc[start:end]).all()
                     else None
                 ),
+                volume_values=(stored_volume[start:end] if stored_volume is not None else None),
+                turnover_values=(stored_turnover[start:end] if stored_turnover is not None else None),
                 metadata=item.get("metadata", {}),
                 config=self.config,
             )
@@ -305,6 +337,7 @@ class CpuShapeSearchManager:
         query_seq_128: Optional[np.ndarray] = None,
         use_hard_filter: bool = False,
         query_points: Optional[List] = None,
+        latest_only: bool = False,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """执行 CPU 多阶段搜索；旧向量/统计参数仅为调用兼容保留。"""
         del query_vector, query_stats, use_hard_filter
@@ -325,6 +358,7 @@ class CpuShapeSearchManager:
             top_k=top_k,
             y_flip=False,
             log=lambda message: print(message, flush=True),
+            latest_only=latest_only,
         )
         with self._lock:
             self.last_diagnostics = diagnostics
@@ -431,7 +465,12 @@ class CpuShapeSearchManager:
                 "h": round(high, 8),
                 "l": round(low, 8),
                 "c": round(close, 8),
-                "v": 0.0,
+                "v": (
+                    round(float(market.volume_values[index]), 8)
+                    if market.volume_values is not None
+                    and np.isfinite(market.volume_values[index])
+                    else 0.0
+                ),
             })
         return {
             "symbol": market.symbol,
@@ -446,6 +485,19 @@ class CpuShapeSearchManager:
     def buckets_status(self) -> Dict[str, int]:
         with self._lock:
             return dict(self._buckets_size)
+
+    def market_snapshot(
+        self,
+        category: str = "all",
+        timeframe: str = "1d",
+    ) -> Tuple[MarketSeries, ...]:
+        """返回指定品类和周期的不可变引用快照，刷新提交后旧对象仍可安全完成本次筛选。"""
+        with self._lock:
+            return tuple(
+                item for item in self.market_series
+                if item.timeframe == timeframe
+                and (category == "all" or item.category == category)
+            )
 
     def bucket_latest_timestamp(self, category: str, timeframe: str) -> int:
         """返回品类×周期缓存中最新一根 K 线时间；空桶返回 0。"""

@@ -14,6 +14,9 @@ AKShare A 股故障切换测试。
 
 修改时间：2026-08-31
 修改作用：验证东财分钟源不可用时切到带硬超时的新浪分钟源，并验证两层分钟源独立熔断。
+
+修改时间：2026-09-15
+修改作用：行情数组扩展为固定七列 OHLCV+turnover，并验证备用源缺失成交额时保持 NaN。
 """
 from __future__ import annotations
 
@@ -92,7 +95,10 @@ def test_daily_kline_falls_back_to_tencent(monkeypatch):
     result = builder.fetch_stock_ohlcv("SZ:000001", "1d", 10)
 
     assert result is not None
-    assert result.shape == (10, 5)
+    assert result.shape == (10, 7)
+    assert result[:, 5].tolist() == [100.0] * 10
+    assert result[:, 6].size == 10
+    assert __import__("numpy").isnan(result[:, 6]).all()
     assert calls[0]["timeout"] == (4, 8)
     assert calls[0]["params"]["param"].startswith("sz000001,day,")
 
@@ -160,7 +166,7 @@ def test_eastmoney_daily_receives_explicit_timeout(monkeypatch):
     result = builder.fetch_stock_ohlcv("SH:600001", "1d", 10)
 
     assert result is not None
-    assert result.shape == (10, 5)
+    assert result.shape == (10, 7)
     assert calls[0]["timeout"] == 8
 
 
@@ -208,6 +214,7 @@ def test_minute_kline_falls_back_to_sina_with_timeout(monkeypatch):
     result = builder.fetch_stock_ohlcv("SH:600001", "15m", 6)
 
     assert result is not None
-    assert result.shape == (6, 5)
+    assert result.shape == (6, 7)
+    assert result[:, 5].tolist() == [100.0] * 6
     assert calls[0]["timeout"] == (4, 8)
     assert calls[0]["params"]["scale"] == "15"
