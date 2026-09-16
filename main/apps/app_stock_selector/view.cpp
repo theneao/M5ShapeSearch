@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace stock_selector {
 namespace {
@@ -67,6 +68,23 @@ void baseObject(lv_obj_t* object, uint32_t color, int radius = 0)
     lv_obj_set_style_border_width(object, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(object, radius, LV_PART_MAIN);
     lv_obj_set_style_pad_all(object, 0, LV_PART_MAIN);
+}
+
+int networkBand(int rssi)
+{
+    return rssi <= -120 ? 0 : rssi <= -80 ? 1 : rssi <= -70 ? 2 : 3;
+}
+
+uint32_t networkColor(int band)
+{
+    return band == 0 ? kMuted : band == 1 ? kRed : band == 2 ? kAccent : kGreen;
+}
+
+void setLabelTextIfChanged(lv_obj_t* label, const char* text)
+{
+    if (label != nullptr && std::strcmp(lv_label_get_text(label), text) != 0) {
+        lv_label_set_text(label, text);
+    }
 }
 
 }  // namespace
@@ -174,6 +192,11 @@ void StockSelectorView::destroyPage()
     _strategy_summary_label = nullptr;
     _strategy_mode_button = nullptr;
     _timeframe_button = nullptr;
+    _last_network_status.clear();
+    _display_network_rssi = -127;
+    _last_network_band = -1;
+    _last_scan_update = 0;
+    _last_scan_x = -1;
     if (_page != nullptr && lv_obj_is_valid(_page)) {
         lv_obj_delete(_page);
     }
@@ -674,9 +697,14 @@ void StockSelectorView::setBusy(bool busy, const char* text)
             lv_obj_set_style_shadow_color(_scan_line, lv_color_hex(kAccent), LV_PART_MAIN);
             lv_obj_set_style_shadow_width(_scan_line, 14, LV_PART_MAIN);
             lv_obj_set_style_shadow_opa(_scan_line, LV_OPA_60, LV_PART_MAIN);
+            lv_obj_set_pos(_scan_line, 8, 13);
+            _last_scan_update = 0;
+            _last_scan_x = 8;
         } else if (!busy && _scan_line != nullptr) {
             lv_obj_delete(_scan_line);
             _scan_line = nullptr;
+            _last_scan_update = 0;
+            _last_scan_x = -1;
         }
     }
     if (busy && _busy_overlay == nullptr && _page != nullptr) {
@@ -770,9 +798,13 @@ void StockSelectorView::triggerPrimary()
 
 void StockSelectorView::updateBusyAnimation(uint32_t now)
 {
-    if (_busy && _scan_line != nullptr) {
+    if (_busy && _scan_line != nullptr && now - _last_scan_update >= 33) {
         const int x = 8 + static_cast<int>((now % 1100) * 386 / 1100);
-        lv_obj_set_pos(_scan_line, x, 13);
+        if (x != _last_scan_x) {
+            lv_obj_set_pos(_scan_line, x, 13);
+            _last_scan_x = x;
+        }
+        _last_scan_update = now;
     }
     if (_busy && _busy_label != nullptr) {
         const uint32_t seconds = (now - _busy_started) / 1000;
@@ -788,20 +820,35 @@ void StockSelectorView::updateBusyAnimation(uint32_t now)
 
 void StockSelectorView::update(uint32_t now, const std::string& networkStatus, int rssi)
 {
-    if (_network_label != nullptr && now - _last_network_update >= 500) {
+    if (_network_label != nullptr) {
+        const int previous_rssi = _display_network_rssi;
+        if (rssi <= -120) {
+            _display_network_rssi = -127;
+        } else if (_display_network_rssi <= -120 ||
+                   std::abs(rssi - _display_network_rssi) >= 5) {
+            _display_network_rssi = rssi;
+        }
+        const int band = networkBand(_display_network_rssi);
+        const bool state_changed = networkStatus != _last_network_status;
+        const bool rssi_changed = previous_rssi != _display_network_rssi;
         char status[64] = {};
-        if (rssi > -120) {
-            std::snprintf(status, sizeof(status), "%s  %d dBm", networkStatus.c_str(), rssi);
+        if (_display_network_rssi > -120) {
+            std::snprintf(status, sizeof(status), "%s  %d dBm", networkStatus.c_str(),
+                          _display_network_rssi);
         } else {
             std::snprintf(status, sizeof(status), "%s", networkStatus.c_str());
         }
-        lv_label_set_text(_network_label, status);
-        if (_wifi_icon != nullptr) {
-            const uint32_t color = rssi <= -120 ? kMuted : rssi <= -80 ? kRed : rssi <= -70 ? kAccent : kGreen;
-            lv_obj_set_style_text_color(_wifi_icon, lv_color_hex(color), LV_PART_MAIN);
-            lv_label_set_text(_wifi_icon, rssi <= -120 ? LV_SYMBOL_CLOSE : LV_SYMBOL_WIFI);
+        if (state_changed || rssi_changed) {
+            setLabelTextIfChanged(_network_label, status);
+            _last_network_status = networkStatus;
         }
-        _last_network_update = now;
+        if (_wifi_icon != nullptr) {
+            if (band != _last_network_band) {
+                lv_obj_set_style_text_color(_wifi_icon, lv_color_hex(networkColor(band)), LV_PART_MAIN);
+                setLabelTextIfChanged(_wifi_icon, band == 0 ? LV_SYMBOL_CLOSE : LV_SYMBOL_WIFI);
+                _last_network_band = band;
+            }
+        }
     }
     if (_hint_label != nullptr && _draw_canvas != nullptr) {
         if (_draw_canvas->empty()) {

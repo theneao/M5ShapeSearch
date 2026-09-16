@@ -22,7 +22,9 @@
 #include <freertos/task.h>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
@@ -101,26 +103,41 @@ public:
         const std::string& portal_ssid
     )
     {
+        if (rssi <= -120) {
+            _display_rssi = -127;
+        } else if (_display_rssi <= -120 || std::abs(rssi - _display_rssi) >= 5) {
+            _display_rssi = rssi;
+        }
         char status_text[96] = {};
-        if (rssi > -120) {
-            std::snprintf(status_text, sizeof(status_text), "%s  %d dBm", status.c_str(), rssi);
+        if (_display_rssi > -120) {
+            std::snprintf(status_text, sizeof(status_text), "%s  %d dBm", status.c_str(),
+                          _display_rssi);
         } else {
             std::snprintf(status_text, sizeof(status_text), "%s", status.c_str());
         }
-        _status->setText(status_text);
-        _status->setTextColor(lv_color_hex(rssi <= -120 ? 0x8D9AB0 : rssi <= -80 ? 0xFF667A :
-                                           rssi <= -70 ? 0xFF8A34 : 0x31D0AA));
-        _wifi_icon->setText(portal_active || rssi > -120 ? LV_SYMBOL_WIFI : LV_SYMBOL_CLOSE);
-        _wifi_icon->setTextColor(lv_color_hex(portal_active ? 0x3C82F6 : rssi <= -120 ? 0x8D9AB0 :
-                                              rssi <= -80 ? 0xFF667A : rssi <= -70 ? 0xFF8A34 : 0x31D0AA));
+        setTextIfChanged(*_status, status_text);
+        const uint32_t status_color = _display_rssi <= -120 ? 0x8D9AB0 :
+                                      _display_rssi <= -80 ? 0xFF667A :
+                                      _display_rssi <= -70 ? 0xFF8A34 : 0x31D0AA;
+        if (status_color != _last_status_color) {
+            _status->setTextColor(lv_color_hex(status_color));
+            _last_status_color = status_color;
+        }
+        setTextIfChanged(*_wifi_icon,
+                         portal_active || _display_rssi > -120 ? LV_SYMBOL_WIFI : LV_SYMBOL_CLOSE);
+        const uint32_t icon_color = portal_active ? 0x3C82F6 : status_color;
+        if (icon_color != _last_icon_color) {
+            _wifi_icon->setTextColor(lv_color_hex(icon_color));
+            _last_icon_color = icon_color;
+        }
 
-        _ssid->setText((portal_active ? "SETUP AP: " + portal_ssid : "SSID: " +
-                        (ssid.empty() ? std::string("CONNECTING") : ssid)).c_str());
-        _api->setText(("API: " + api_url).c_str());
-        _toggle_button->label().setText(portal_active ? "SETUP HOTSPOT: ON" :
-                                                        "SETUP HOTSPOT: OFF");
-        _help->setText(portal_active ? "Connect phone; open 192.168.4.1" :
-                                      "Phone setup only - default OFF");
+        setTextIfChanged(*_ssid, portal_active ? "SETUP AP: " + portal_ssid : "SSID: " +
+                         (ssid.empty() ? std::string("CONNECTING") : ssid));
+        setTextIfChanged(*_api, "API: " + api_url);
+        setTextIfChanged(_toggle_button->label(), portal_active ? "SETUP HOTSPOT: ON" :
+                                                            "SETUP HOTSPOT: OFF");
+        setTextIfChanged(*_help, portal_active ? "Connect phone; open 192.168.4.1" :
+                                                "Phone setup only - default OFF");
     }
 
 private:
@@ -155,8 +172,15 @@ private:
         label->setTextColor(lv_color_hex(color));
         label->align(LV_ALIGN_TOP_LEFT, x, y);
         label->setWidth(326 - x);
-        label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        label->setLongMode(LV_LABEL_LONG_MODE_DOTS);
         return label;
+    }
+
+    static void setTextIfChanged(Label& label, const std::string& text)
+    {
+        if (std::strcmp(label.getText(), text.c_str()) != 0) {
+            label.setText(text);
+        }
     }
 
     std::unique_ptr<Container> _panel;
@@ -170,6 +194,9 @@ private:
     std::unique_ptr<Label> _help;
     std::unique_ptr<Button> _toggle_button;
     bool _toggle_requested = false;
+    int _display_rssi = -127;
+    uint32_t _last_status_color = UINT32_MAX;
+    uint32_t _last_icon_color = UINT32_MAX;
 };
 
 WifiSettingsWorker::WifiSettingsWorker()

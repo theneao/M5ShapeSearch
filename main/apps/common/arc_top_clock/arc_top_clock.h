@@ -9,6 +9,7 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <smooth_lvgl.hpp>
+#include <string>
 #include <string_view>
 #include <cstdint>
 #include <memory>
@@ -30,6 +31,7 @@ public:
 protected:
     std::array<std::unique_ptr<uitk::lvgl_cpp::Label>, 5> labels;
     uint32_t update_time_count = 0;
+    std::string _last_text;
 
     void set_clock_to(const std::string_view text);
 };

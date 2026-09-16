@@ -144,7 +144,11 @@ private:
     std::string _busy_text;
     uint32_t _busy_started = 0;
     uint32_t _last_busy_second = UINT32_MAX;
-    uint32_t _last_network_update = 0;
+    uint32_t _last_scan_update = 0;
+    int _last_scan_x = -1;
+    std::string _last_network_status;
+    int _display_network_rssi = -127;
+    int _last_network_band = -1;
     uint32_t _toast_until = 0;
 };
 

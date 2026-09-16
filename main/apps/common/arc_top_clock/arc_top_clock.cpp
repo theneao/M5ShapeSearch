@@ -54,6 +54,11 @@ void ArcTopClock::update(bool force)
 
 void ArcTopClock::set_clock_to(const std::string_view text)
 {
+    if (_last_text == text) {
+        return;
+    }
+    _last_text.assign(text.data(), text.size());
+
     const int count = std::min((int)text.size(), (int)labels.size());
     for (int i = 0; i < count; i++) {
         if (text[i] == '0') {

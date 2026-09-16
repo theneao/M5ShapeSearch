@@ -183,15 +183,26 @@ public:
 
     void update() override
     {
-        auto level = GetHAL().getBatteryLevel();
-        _label_level->setText(fmt::format("{}%", level));
-        _battery_icon->setLevel(level);
-        _battery_icon->setCharging(GetHAL().isBatteryCharging());
+        const int level = GetHAL().getBatteryLevel();
+        const bool charging = GetHAL().isBatteryCharging();
+        if (level != _last_level) {
+            _label_level->setText(fmt::format("{}%", level));
+            _battery_icon->setLevel(level);
+            _last_level = level;
+        }
+        if (!_charging_initialized || charging != _last_charging) {
+            _battery_icon->setCharging(charging);
+            _last_charging = charging;
+            _charging_initialized = true;
+        }
     }
 
 private:
     std::unique_ptr<Label> _label_level;
     std::unique_ptr<BatteryIcon> _battery_icon;
+    int _last_level = -1;
+    bool _last_charging = false;
+    bool _charging_initialized = false;
 };
 
 class StatusBarView {
