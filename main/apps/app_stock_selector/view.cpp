@@ -200,8 +200,9 @@ void StockSelectorView::createDrawPage(bool animate)
 
     createLabel(_page, "SHAPE SEARCH", &lv_font_montserrat_22, kText, LV_ALIGN_TOP_MID, 0, 18);
     lv_obj_t* network = lv_obj_create(_page);
-    lv_obj_set_pos(network, 104, 50);
-    lv_obj_set_size(network, 194, 34);
+    // y=50 处圆屏可用弦宽约为 x=88..378；三个顶部控件全部收进该安全区。
+    lv_obj_set_pos(network, 166, 50);
+    lv_obj_set_size(network, 140, 34);
     baseObject(network, 0x19243A, 17);
     lv_obj_remove_flag(network, LV_OBJ_FLAG_SCROLLABLE);
     _network_label = createLabel(network, "CONNECTING", &lv_font_montserrat_10, kText,
@@ -219,7 +220,7 @@ void StockSelectorView::createDrawPage(bool animate)
         _category_buttons.push_back(chip);
         chip_x += widths[index] + 6;
     }
-    _timeframe_button = createButton(_page, "1D", 306, 50, 60, 34, 0x1A2942, ActionTimeframe);
+    _timeframe_button = createButton(_page, "1D", 314, 50, 64, 34, 0x1A2942, ActionTimeframe);
     styleChipSelection();
 
     _draw_canvas = std::make_unique<DrawCanvas>(_page);
@@ -230,10 +231,11 @@ void StockSelectorView::createDrawPage(bool animate)
     );
     lv_obj_remove_flag(_hint_label, LV_OBJ_FLAG_CLICKABLE);
 
-    createButton(_page, "FILTER", 28, 50, 68, 34, 0x1A2942, ActionOpenStrategies);
-    createButton(_page, "CLEAR", 58, 347, 84, 62, 0x263147, ActionClear);
-    createButton(_page, "SAVE", 150, 347, 82, 62, kBlue, ActionSaveStrategy);
-    createButton(_page, "MATCH", 240, 347, 166, 62, kAccent, ActionMatch);
+    createButton(_page, "FILTER", 88, 50, 70, 34, 0x1A2942, ActionOpenStrategies);
+    // y=347..409 的安全弦边界约为 x=80..386，避免底部按钮被圆角裁切。
+    createButton(_page, "CLEAR", 84, 347, 80, 62, 0x263147, ActionClear);
+    createButton(_page, "SAVE", 172, 347, 80, 62, kBlue, ActionSaveStrategy);
+    createButton(_page, "MATCH", 260, 347, 122, 62, kAccent, ActionMatch);
 
     createLabel(_page, "KEY A: EXIT / CANCEL    KEY B: MATCH", &lv_font_montserrat_10, kMuted,
                 LV_ALIGN_BOTTOM_MID, 0, -36);
@@ -256,8 +258,8 @@ void StockSelectorView::createStrategiesPage(bool animate)
                 kMuted, LV_ALIGN_TOP_MID, 0, 49);
 
     lv_obj_t* list = lv_obj_create(_page);
-    lv_obj_set_pos(list, 66, 72);
-    lv_obj_set_size(list, 334, 278);
+    lv_obj_set_pos(list, 72, 72);
+    lv_obj_set_size(list, 322, 278);
     baseObject(list, kBackground);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ACTIVE);
@@ -268,7 +270,7 @@ void StockSelectorView::createStrategiesPage(bool animate)
     for (std::size_t index = 0; index < _strategies.size(); ++index) {
         const auto& strategy = _strategies[index];
         lv_obj_t* row = createButton(
-            list, "", 12, static_cast<int>(index) * 54, 286, 46,
+            list, "", 8, static_cast<int>(index) * 54, 278, 46,
             strategy.selected ? 0x73451F : kPanel,
             ActionToggleStrategy, static_cast<int>(index)
         );
@@ -291,9 +293,9 @@ void StockSelectorView::createStrategiesPage(bool animate)
 
     _strategy_mode_button = createButton(
         _page, _strategy_intersection ? "MODE: AND" : "MODE: OR",
-        88, 365, 132, 54, 0x263147, ActionCombine
+        96, 365, 130, 52, 0x263147, ActionCombine
     );
-    createButton(_page, "RUN FILTER", 230, 365, 150, 54, kAccent, ActionRunStrategies);
+    createButton(_page, "RUN FILTER", 234, 365, 136, 52, kAccent, ActionRunStrategies);
     char market[64] = {};
     std::snprintf(market, sizeof(market), "%s  %s  |  %u SELECTED",
                   _category.c_str(), _timeframe.c_str(),
