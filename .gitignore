@@ -99,6 +99,8 @@ core.*
 *.dmp
 device_logs/
 device_screenshots/
+# GPIO38 TE/帧时序诊断产生的本地采样文件
+display_traces/
 
 sdkconfig
 sdkconfig.old

@@ -23,6 +23,11 @@
  * 修改作用：按 LVGL 官方建议把 PARTIAL 绘制缓冲缩至约 1/10 屏，并优先放入内部 DMA RAM；
  *           保留 AMOLED 帧缓冲的末次 flush 统一提交，减少 PSRAM 绘制延迟。
  * 使用方式：Smooth/Eco 设置不变；内部 RAM 不足时自动回退 PSRAM。
+ *
+ * 修改时间：2026-09-21
+ * 修改作用：修复 CO5300 持续闪烁的根因：每帧提交前等待 GPIO38 的 TE 上升沿，并等待底层
+ *           QSPI DMA 完成后再归还 LVGL 绘制缓冲，避免面板扫描与写屏、相邻两帧传输互相覆盖。
+ * 使用方式：无需页面配合；所有 LVGL 页面统一通过帧提交出口完成 TE 同步。
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
@@ -32,6 +37,7 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <algorithm>
+#include <driver/gpio.h>
 #include <memory>
 
 static const std::string_view _tag = "HAL-Display";
@@ -184,6 +190,11 @@ public:
     {
         _panel_instance.setBrightness(brightness);
     }
+
+    void waitPanelTransfer()
+    {
+        _panel_instance.waitDisplay();
+    }
 };
 
 static std::unique_ptr<M5StopWatch> _display;
@@ -294,12 +305,74 @@ Hal::TouchPoint Hal::getTouchPoint()
 #include <atomic>
 
 static SemaphoreHandle_t xGuiSemaphore;
+static SemaphoreHandle_t xTearSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
 
 // PARTIAL 模式按官方建议使用约 1/10 屏缓冲。48 为偶数，满足 CO5300 区域对齐要求。
 static constexpr uint32_t kLvBufferLines        = 48;
 static constexpr uint32_t kSmoothRefreshPeriod = 16;
 static constexpr uint32_t kEcoRefreshPeriod    = 33;
+static constexpr uint32_t kTearSyncTimeoutMs   = 25;
+
+static void IRAM_ATTR display_te_isr(void*)
+{
+    BaseType_t task_woken = pdFALSE;
+    xSemaphoreGiveFromISR(xTearSemaphore, &task_woken);
+    if (task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
+
+static bool init_display_te_sync()
+{
+    xTearSemaphore = xSemaphoreCreateBinary();
+    if (xTearSemaphore == nullptr) {
+        mclog::tagError(_tag, "TE semaphore allocation failed");
+        return false;
+    }
+
+    gpio_config_t config = {};
+    config.pin_bit_mask  = 1ULL << cfg_pin_te;
+    config.mode          = GPIO_MODE_INPUT;
+    config.pull_up_en    = GPIO_PULLUP_ENABLE;
+    config.pull_down_en  = GPIO_PULLDOWN_DISABLE;
+    config.intr_type     = GPIO_INTR_POSEDGE;
+    esp_err_t result     = gpio_config(&config);
+    if (result != ESP_OK) {
+        mclog::tagError(_tag, "TE GPIO config failed: {}", static_cast<int>(result));
+        return false;
+    }
+
+    result = gpio_install_isr_service(0);
+    if (result != ESP_OK && result != ESP_ERR_INVALID_STATE) {
+        mclog::tagError(_tag, "TE ISR service init failed: {}", static_cast<int>(result));
+        return false;
+    }
+    result = gpio_isr_handler_add(cfg_pin_te, display_te_isr, nullptr);
+    if (result != ESP_OK) {
+        mclog::tagError(_tag, "TE ISR handler init failed: {}", static_cast<int>(result));
+        return false;
+    }
+    mclog::tagInfo(_tag, "CO5300 TE sync enabled on GPIO{}", static_cast<int>(cfg_pin_te));
+    return true;
+}
+
+static bool wait_display_te()
+{
+    // 丢弃上一帧留下的脉冲，只接受本次提交之后到达的新帧边界。
+    xSemaphoreTake(xTearSemaphore, 0);
+    if (xSemaphoreTake(xTearSemaphore, pdMS_TO_TICKS(kTearSyncTimeoutMs)) == pdTRUE) {
+        return true;
+    }
+
+    static uint32_t last_log_tick = 0;
+    const uint32_t now = xTaskGetTickCount();
+    if (now - last_log_tick >= pdMS_TO_TICKS(1000)) {
+        last_log_tick = now;
+        mclog::tagError(_tag, "CO5300 TE timeout; frame kept pending");
+    }
+    return false;
+}
 
 static uint32_t lvgl_tick_get_cb()
 {
@@ -369,8 +442,9 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
     // LVGL 可能把同一帧拆成多个无效区域。前面的 flush 只更新内存帧缓冲，
     // 最后一个 flush 再一次性把累计区域提交到 CO5300，避免上下区域显示不同动画时刻。
-    if (lv_display_flush_is_last(disp)) {
+    if (lv_display_flush_is_last(disp) && wait_display_te()) {
         gfx.display();
+        static_cast<M5StopWatch&>(gfx).waitPanelTransfer();
     }
 
     lv_display_flush_ready(disp);
@@ -450,6 +524,9 @@ void Hal::lvgl_init()
     lv_indev_set_display(lvTouchpad, disp);
 
     xGuiSemaphore = xSemaphoreCreateMutex();
+    if (!init_display_te_sync()) {
+        return;
+    }
     lv_tick_set_cb(lvgl_tick_get_cb);
 
     // UI 任务尚未启动，此处可原子创建并完整提交首帧。提交完再恢复亮度，开机不会闪出中间态。
