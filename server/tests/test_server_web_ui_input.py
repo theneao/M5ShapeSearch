@@ -18,12 +18,16 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-09-23
 修改作用：将视觉契约升级为 V0.22 商业化品牌色与定制组件皮肤。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-23
+修改作用：覆盖策略页可清空数字输入及 1..200 边界归一化。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
 import numpy as np
 
-from server_web_ui import APP_CSS, _progress_bar, _sketch_to_points
+from server_web_ui import APP_CSS, _progress_bar, _sketch_to_points, _strategy_limit
 
 
 def test_numpy_composite_is_converted_without_boolean_evaluation():
@@ -62,8 +66,17 @@ def test_design_contract_and_progress_accessibility():
     assert "--ms-accent: #0f62fe" in APP_CSS
     assert "--checkbox-label-background-fill-selected: #edf4ff" in APP_CSS
     assert ".brand-lockup" in APP_CSS
+    assert ".app-button" in APP_CSS
+    assert "\nbutton:not(.primary):not(.stop)" not in APP_CSS
     assert "prefers-reduced-motion" in APP_CSS
     assert 'role="progressbar"' in progress
     assert 'aria-valuenow="42.5"' in progress
     assert "加载 &lt;stock&gt;" in progress
     assert "#374151" not in progress
+
+
+def test_strategy_limit_accepts_cleared_and_out_of_range_number_input():
+    assert _strategy_limit(None) == 100
+    assert _strategy_limit("12") == 12
+    assert _strategy_limit(0) == 1
+    assert _strategy_limit(999) == 200

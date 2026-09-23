@@ -39,6 +39,11 @@
 修改作用：二次重构商业视觉风格，增加品牌化应用顶栏、定制表单控件、研究面板、数据表格、
           画板、图库及状态组件皮肤，消除 Gradio 默认拼装感。
 使用方式：启动方式不变；浏览器刷新 7860 即可加载完整商用风格。
+
+修改时间：2026-09-23
+修改作用：修复全局按钮样式误伤 Gradio 内部控件及“最多显示”滑块刻度挤连；策略筛选页改为
+          条件矩阵、独立命令栏、结果账本与详情栏，并对数量输入做 1..200 服务端归一化。
+使用方式：在策略筛选页选择策略与范围，输入最多显示数量后执行筛选。
 """
 from __future__ import annotations
 
@@ -524,9 +529,14 @@ button.stop {
   box-shadow: none !important;
 }
 
-button.secondary,
-button:not(.primary):not(.stop) {
+.app-button,
+.app-button button {
   min-height: 40px !important;
+  border-radius: 8px !important;
+}
+
+button.app-button:not(.primary):not(.stop),
+.app-button button:not(.primary):not(.stop) {
   border-color: var(--ms-line) !important;
   background: #ffffff !important;
   color: var(--ms-ink-secondary) !important;
@@ -534,11 +544,146 @@ button:not(.primary):not(.stop) {
   box-shadow: none !important;
 }
 
-button.secondary:hover,
-button:not(.primary):not(.stop):hover {
+button.app-button:not(.primary):not(.stop):hover,
+.app-button button:not(.primary):not(.stop):hover {
   border-color: var(--ms-line-strong) !important;
   background: var(--ms-surface-subtle) !important;
   color: var(--ms-ink) !important;
+}
+
+.strategy-builder {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.strategy-builder__head {
+  padding: 20px 22px 15px;
+  border-bottom: 1px solid var(--ms-line);
+}
+
+.strategy-builder__body {
+  padding: 18px 22px 21px !important;
+}
+
+.strategy-catalog {
+  padding: 14px !important;
+  border: 1px solid var(--ms-line) !important;
+  border-radius: 9px !important;
+  background: var(--ms-surface-raised) !important;
+}
+
+.criteria-grid {
+  display: grid !important;
+  grid-template-columns: minmax(220px, 3fr) minmax(220px, 3fr) minmax(320px, 4fr) minmax(150px, 2fr) !important;
+  align-items: start !important;
+  gap: 14px !important;
+}
+
+.criteria-grid > * {
+  min-width: 0 !important;
+}
+
+.strategy-segment .wrap,
+.strategy-timeframe .wrap {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px !important;
+}
+
+.strategy-segment,
+.strategy-timeframe,
+.strategy-limit {
+  min-height: 84px;
+}
+
+.strategy-market .wrap {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.strategy-timeframe .wrap {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.strategy-segment .wrap label,
+.strategy-timeframe .wrap label {
+  justify-content: center !important;
+  margin: 0 !important;
+  padding-inline: 8px !important;
+  white-space: nowrap;
+}
+
+.strategy-limit input {
+  min-height: 38px !important;
+  font-family: var(--ms-mono) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  text-align: right;
+}
+
+.strategy-actions {
+  align-items: center !important;
+  gap: 8px !important;
+  padding-top: 2px;
+}
+
+.strategy-actions .primary {
+  flex: 1.45 1 0 !important;
+}
+
+.strategy-actions .stop,
+.strategy-actions .app-button:not(.primary) {
+  flex: 1 1 0 !important;
+}
+
+.strategy-status {
+  margin-top: 4px !important;
+  padding: 11px 13px !important;
+  border-left: 3px solid var(--ms-accent) !important;
+  border-radius: 0 7px 7px 0 !important;
+  background: #f4f7fb !important;
+}
+
+.strategy-results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 2px 10px;
+}
+
+.strategy-results-head strong {
+  color: var(--ms-ink);
+  font-size: 14px;
+  font-weight: 690;
+}
+
+.strategy-results-head span {
+  color: var(--ms-muted);
+  font-size: 11px;
+}
+
+.strategy-table td {
+  font-weight: 450 !important;
+}
+
+.strategy-table thead button {
+  min-height: auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ms-muted) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+}
+
+.strategy-detail-bar {
+  align-items: end !important;
+  gap: 10px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--ms-line) !important;
+  border-radius: 9px !important;
+  background: #ffffff !important;
 }
 
 button,
@@ -652,6 +797,12 @@ select:focus-visible,
 
 footer { display: none !important; }
 
+@media (max-width: 1180px) {
+  .criteria-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
 @media (max-width: 900px) {
   .gradio-container { padding: 0 14px 36px !important; }
   #studio-header { margin-inline: -14px; }
@@ -666,6 +817,11 @@ footer { display: none !important; }
     overflow-x: auto !important;
   }
   .panel { padding: 14px !important; }
+  .strategy-builder__head,
+  .strategy-builder__body { padding-inline: 14px !important; }
+  .criteria-grid { grid-template-columns: 1fr !important; }
+  .strategy-actions { align-items: stretch !important; flex-direction: column !important; }
+  .strategy-actions > * { width: 100% !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1019,8 +1175,16 @@ def delete_sketch_strategy(strategy_id: str):
         return gr.update(), gr.update(), f"删除失败：{exc}"
 
 
+def _strategy_limit(value: Any) -> int:
+    """将可清空的 Number 输入收敛到服务端允许的 1..200。"""
+    try:
+        return max(1, min(int(float(value)), 200))
+    except (TypeError, ValueError, OverflowError):
+        return 100
+
+
 def run_strategy_screen(
-    strategy_ids: List[str], combine: str, category: str, timeframe: str, limit: int
+    strategy_ids: List[str], combine: str, category: str, timeframe: str, limit: Any
 ):
     if not strategy_ids:
         return [], gr.update(choices=[], value=None), "请至少选择一个策略。"
@@ -1029,7 +1193,7 @@ def run_strategy_screen(
         "combine": combine,
         "category": category,
         "timeframe": timeframe,
-        "limit": int(limit),
+        "limit": _strategy_limit(limit),
     }
     try:
         deadline = time.monotonic() + 15 * 60
@@ -1077,15 +1241,13 @@ def run_strategy_screen(
         _LAST_STRATEGY_RESULTS.clear()
         _LAST_STRATEGY_RESULTS.update(stored)
     unavailable = data.get("unavailable_series", {})
-    unavailable_text = "，".join(
-        f"{key}: {value} 条缺字段" for key, value in unavailable.items() if int(value) > 0
-    )
+    unavailable_total = sum(int(value) for value in unavailable.values() if int(value) > 0)
     status = (
         f"筛选完成：扫描 {int(data.get('evaluated_series', 0))} 个标的，命中 "
         f"{int(data.get('total', 0))} 个，耗时 {int(data.get('query_ms', 0))} ms。"
     )
-    if unavailable_text:
-        status += f" 真实字段不足：{unavailable_text}。"
+    if unavailable_total:
+        status += f" 数据完整性提示：已跳过 {unavailable_total} 条缺少必要字段的序列。"
     return rows, gr.update(choices=choices, value=choices[0] if choices else None), status
 
 
@@ -1295,7 +1457,7 @@ def add_settings_tabs(app: gr.Blocks) -> None:
             stock_order = gr.Radio(["top", "bottom"], value="top", label="前/后 N")
         with gr.Row():
             stock_sector = gr.Dropdown(["all"], value="all", allow_custom_value=True, label="行业板块")
-            sector_button = gr.Button("从 AKShare 刷新板块列表")
+            sector_button = gr.Button("从 AKShare 刷新板块列表", elem_classes=["app-button"])
         sector_status = gr.Markdown("", elem_classes=["status-copy"])
 
         gr.Markdown("### 虚拟货币", elem_classes=["page-intro"])
@@ -1331,8 +1493,10 @@ def add_settings_tabs(app: gr.Blocks) -> None:
             binance_retry_count = gr.Slider(0, 5, value=3, step=1, label="5xx/网络重试次数")
 
         with gr.Row():
-            save_button = gr.Button("仅保存参数")
-            refresh_button = gr.Button("保存并立即后台刷新", variant="primary")
+            save_button = gr.Button("仅保存参数", elem_classes=["app-button"])
+            refresh_button = gr.Button(
+                "保存并立即后台刷新", variant="primary", elem_classes=["app-button"]
+            )
         data_progress = gr.HTML(_progress_bar(0.0, "created", "等待加载状态"))
         save_status = gr.Markdown("", elem_classes=["status-copy"])
         config_outputs = [
@@ -1361,7 +1525,7 @@ def add_settings_tabs(app: gr.Blocks) -> None:
             label="阶段与异常日志（最近 30 条）", lines=12, interactive=False,
             elem_classes=["log-console"],
         )
-        status_button = gr.Button("刷新状态")
+        status_button = gr.Button("刷新状态", elem_classes=["app-button"])
         status_outputs = [data_progress, status_progress, status_markdown, bucket_table, logs]
         status_button.click(refresh_status, outputs=status_outputs)
         refresh_event.then(refresh_status, outputs=status_outputs)
@@ -1423,9 +1587,13 @@ def create_app() -> gr.Blocks:
                             )
                             top_k = gr.Slider(1, 20, value=10, step=1, label="结果数量")
                         with gr.Row():
-                            match_button = gr.Button("开始匹配", variant="primary")
-                            cancel_button = gr.Button("取消等待", variant="stop")
-                            clear_button = gr.Button("清空画板")
+                            match_button = gr.Button(
+                                "开始匹配", variant="primary", elem_classes=["app-button"]
+                            )
+                            cancel_button = gr.Button(
+                                "取消等待", variant="stop", elem_classes=["app-button"]
+                            )
+                            clear_button = gr.Button("清空画板", elem_classes=["app-button"])
                         with gr.Accordion("保存为手绘策略", open=False):
                             with gr.Row():
                                 sketch_strategy_name = gr.Textbox(
@@ -1434,7 +1602,9 @@ def create_app() -> gr.Blocks:
                                 sketch_strategy_threshold = gr.Slider(
                                     0.40, 0.95, value=0.68, step=0.01, label="最低相似度"
                                 )
-                                save_sketch_button = gr.Button("保存策略", variant="secondary")
+                                save_sketch_button = gr.Button(
+                                    "保存策略", variant="secondary", elem_classes=["app-button"]
+                                )
                             sketch_strategy_status = gr.Markdown("", elem_classes=["status-copy"])
                         match_status = gr.Markdown("", elem_classes=["status-copy"])
                     with gr.Column(scale=6, elem_classes=["panel"]):
@@ -1457,7 +1627,9 @@ def create_app() -> gr.Blocks:
                     )
                     with gr.Row():
                         selected = gr.Dropdown(label="查看单标的 K 线")
-                        detail_button = gr.Button("加载详情", variant="secondary")
+                        detail_button = gr.Button(
+                            "加载详情", variant="secondary", elem_classes=["app-button"]
+                        )
                     detail_plot = gr.Plot(label="单标的 K 线", elem_classes=["chart-panel"])
                     detail_status = gr.Markdown("", elem_classes=["status-copy"])
 
@@ -1481,48 +1653,87 @@ def create_app() -> gr.Blocks:
                     '<section class="page-intro"><h2>组合策略筛选</h2>'
                     '<p>组合真实 OHLCV 量价规则与已保存的手绘形态，按交集或并集快速筛选。</p></section>'
                 )
-                with gr.Column(elem_classes=["panel"]):
+                with gr.Column(elem_classes=["panel", "strategy-builder"]):
                     gr.HTML(
-                        '<div class="panel-heading"><span class="panel-heading__title">策略构建器</span>'
+                        '<div class="panel-heading strategy-builder__head">'
+                        '<span class="panel-heading__title">策略构建器</span>'
                         '<span class="panel-heading__hint">MULTI-FACTOR SCREEN</span></div>'
                     )
-                    strategy_selector = gr.CheckboxGroup(
-                        choices=[], label="选择策略", interactive=True
-                    )
-                    with gr.Row():
-                        strategy_combine = gr.Radio(
-                            choices=[("交集：同时满足", "intersection"), ("并集：满足任一", "union")],
-                            value="intersection",
-                            label="组合方式",
+                    with gr.Column(elem_classes=["strategy-builder__body"]):
+                        strategy_selector = gr.CheckboxGroup(
+                            choices=[], label="选择策略", interactive=True,
+                            elem_classes=["strategy-catalog"],
                         )
-                        strategy_category = gr.Radio(
-                            choices=[("A 股", "stock"), ("虚拟货币", "crypto"), ("全部", "all")],
-                            value="stock",
-                            label="市场",
+                        with gr.Row(elem_classes=["criteria-grid"]):
+                            with gr.Column(scale=3, min_width=220):
+                                strategy_combine = gr.Radio(
+                                    choices=[
+                                        ("交集：同时满足", "intersection"),
+                                        ("并集：满足任一", "union"),
+                                    ],
+                                    value="intersection",
+                                    label="组合方式",
+                                    elem_classes=["strategy-segment"],
+                                )
+                            with gr.Column(scale=3, min_width=220):
+                                strategy_category = gr.Radio(
+                                    choices=[
+                                        ("A 股", "stock"),
+                                        ("虚拟货币", "crypto"),
+                                        ("全部", "all"),
+                                    ],
+                                    value="stock",
+                                    label="市场",
+                                    elem_classes=["strategy-segment", "strategy-market"],
+                                )
+                            with gr.Column(scale=4, min_width=320):
+                                strategy_timeframe = gr.Radio(
+                                    ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+                                    value="1d",
+                                    label="周期",
+                                    elem_classes=["strategy-timeframe"],
+                                )
+                            with gr.Column(scale=2, min_width=150):
+                                strategy_limit = gr.Number(
+                                    value=100,
+                                    minimum=1,
+                                    maximum=200,
+                                    precision=0,
+                                    label="最多显示",
+                                    elem_classes=["strategy-limit", "numeric-control"],
+                                )
+                        with gr.Row(elem_classes=["strategy-actions"]):
+                            strategy_screen_button = gr.Button(
+                                "开始筛选", variant="primary", elem_classes=["app-button"]
+                            )
+                            strategy_cancel_button = gr.Button(
+                                "停止等待", variant="stop", elem_classes=["app-button"]
+                            )
+                            strategy_refresh_button = gr.Button(
+                                "刷新策略目录", elem_classes=["app-button"]
+                            )
+                        strategy_status = gr.Markdown(
+                            "请选择策略并设置筛选范围。",
+                            elem_classes=["status-copy", "strategy-status"],
                         )
-                        strategy_timeframe = gr.Radio(
-                            ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
-                            value="1d",
-                            label="周期",
-                        )
-                        strategy_limit = gr.Slider(1, 200, value=100, step=1, label="最多显示")
-                    with gr.Row():
-                        strategy_screen_button = gr.Button("开始筛选", variant="primary")
-                        strategy_cancel_button = gr.Button("停止等待", variant="stop")
-                        strategy_refresh_button = gr.Button("刷新策略目录")
-                    strategy_status = gr.Markdown("", elem_classes=["status-copy"])
                 with gr.Column(elem_classes=["result-section"]):
+                    gr.HTML(
+                        '<div class="strategy-results-head"><strong>筛选结果</strong>'
+                        '<span>按覆盖策略数、综合得分和涨跌幅排序</span></div>'
+                    )
                     strategy_table = gr.Dataframe(
                         headers=[
                             "Rank", "Symbol", "Name", "Category", "Price", "Change",
                             "Coverage", "Score", "Matched Strategies",
                         ],
                         interactive=False,
-                        elem_classes=["numeric-table", "result-table"],
+                        elem_classes=["numeric-table", "result-table", "strategy-table"],
                     )
-                    with gr.Row():
+                    with gr.Row(elem_classes=["strategy-detail-bar"]):
                         strategy_selected = gr.Dropdown(label="查看筛选标的 K 线")
-                        strategy_detail_button = gr.Button("加载 K 线", variant="secondary")
+                        strategy_detail_button = gr.Button(
+                            "加载 K 线", variant="secondary", elem_classes=["app-button"]
+                        )
                     strategy_detail_plot = gr.Plot(
                         label="策略筛选结果 K 线", elem_classes=["chart-panel"]
                     )
@@ -1532,7 +1743,7 @@ def create_app() -> gr.Blocks:
                             choices=[], label="已保存的手绘策略"
                         )
                         delete_strategy_button = gr.Button(
-                            "删除所选手绘策略", variant="stop"
+                            "删除所选手绘策略", variant="stop", elem_classes=["app-button"]
                         )
 
                 catalog_outputs = [strategy_selector, saved_strategy_selector, strategy_status]
