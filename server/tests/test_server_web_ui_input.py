@@ -14,6 +14,10 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-09-23
 修改作用：覆盖专业界面设计契约与可访问进度条，防止视觉重构后退回内联旧样式。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-23
+修改作用：将视觉契约升级为 V0.22 商业化品牌色与定制组件皮肤。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
@@ -55,7 +59,9 @@ def test_numpy_layer_fallback_is_converted_without_boolean_evaluation():
 def test_design_contract_and_progress_accessibility():
     progress = _progress_bar(42.5, "running", "加载 <stock>")
 
-    assert "--ms-accent: #1769e0" in APP_CSS
+    assert "--ms-accent: #0f62fe" in APP_CSS
+    assert "--checkbox-label-background-fill-selected: #edf4ff" in APP_CSS
+    assert ".brand-lockup" in APP_CSS
     assert "prefers-reduced-motion" in APP_CSS
     assert 'role="progressbar"' in progress
     assert 'aria-valuenow="42.5"' in progress

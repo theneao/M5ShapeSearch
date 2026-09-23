@@ -1,6 +1,6 @@
 # M5 Shape Search — Interface Design System
 
-> 创建时间：2026-09-23  
+> 创建时间：2026-09-23；最近修改：2026-09-23
 > 作用：定义服务器分析工作台的视觉、交互和内容规范，作为后续页面扩展的唯一设计基线。  
 > 使用方式：新增或修改 Web 页面前先对照本文件；若引入新颜色、间距、圆角或交互模式，应先更新本文件。
 
@@ -10,8 +10,9 @@
 
 - 核心感受：克制、精确、安静、可信。
 - 信息密度：中高；优先快速比较和决策，不牺牲扫描效率。
-- 差异度：5/10；保留专业工具熟悉感，以排版和细节建立辨识度。
+- 差异度：6/10；保留专业工具熟悉感，通过品牌顶栏、组件皮肤和数据表达建立辨识度。
 - 动效强度：3/10；仅用于状态反馈、页签切换和进度变化。
+- 信息密度：7/10；桌面优先，首屏同时容纳查询、图形和关键操作。
 - 参考方法：采用 `awesome-design-md` 中 Linear 的精确层级、Coinbase 的金融可信感，并根据本项目的数据研究场景重新设计；不复制其品牌资产。
 
 ## 2. Visual principles
@@ -28,25 +29,25 @@
 
 | Token | Value | Use |
 |---|---:|---|
-| `canvas` | `#F4F6F8` | 页面背景 |
+| `canvas` | `#EDF0F4` | 浏览器外层背景 |
 | `surface` | `#FFFFFF` | 主工作区 |
-| `surface-subtle` | `#F8FAFC` | 次级区域、表头 |
-| `ink` | `#111827` | 主文字 |
-| `ink-secondary` | `#475467` | 辅助文字 |
-| `ink-muted` | `#667085` | 标签、说明 |
-| `hairline` | `#DDE3EA` | 边框与分隔线 |
-| `hairline-strong` | `#C9D2DD` | hover/active 边框 |
-| `accent` | `#1769E0` | 主操作、选中状态 |
-| `accent-hover` | `#1257BD` | 主操作 hover |
-| `accent-soft` | `#EAF2FF` | 选中背景 |
+| `surface-subtle` | `#F6F8FA` | 次级区域、表头 |
+| `ink` | `#101828` | 主文字 |
+| `ink-secondary` | `#3D4A5C` | 辅助文字 |
+| `ink-muted` | `#6B7789` | 标签、说明 |
+| `hairline` | `#DFE4EA` | 边框与分隔线 |
+| `hairline-strong` | `#C6CED8` | hover/active 边框 |
+| `accent` | `#0F62FE` | 主操作、选中状态 |
+| `accent-hover` | `#0043CE` | 主操作 hover |
+| `accent-soft` | `#EDF4FF` | 选中背景 |
 | `success` | `#12805C` | 成功/就绪 |
 | `warning` | `#A86200` | 等待/降级 |
 | `danger` | `#C43D4B` | 错误/破坏操作 |
 
 ### Typography
 
-- 界面：`Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif`
-- 数值：`"SFMono-Regular", Consolas, "Liberation Mono", monospace`
+- 界面：`"Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei", ui-sans-serif, sans-serif`
+- 数值：`"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace`
 - 页面标题：28px / 700；区块标题：16px / 650；正文：14px / 400；标签：12px / 600。
 - 禁止超大 Hero 标题、全大写长段文字和低对比度正文。
 
@@ -59,7 +60,7 @@
 
 ## 4. Components
 
-- **Header**：产品名、当前职责与连接端点；不使用营销口号。
+- **Header**：36px 深色品牌标识、产品名、引擎与连接端点；保持 76px 商用应用顶栏高度。
 - **Primary navigation**：水平页签，选中项使用蓝色下边线与深色文字。
 - **Workbench**：输入与参数为左栏，图表与候选为右栏，表格单独占满宽度。
 - **Button**：每组最多一个主按钮；取消和删除为语义危险色，普通刷新使用中性按钮。
@@ -67,6 +68,13 @@
 - **Table**：弱表头、细行分隔、数字等宽，hover 只做轻微底色变化。
 - **Progress**：同时显示阶段、百分比、状态文案；成功、降级和错误分别使用语义色。
 - **Empty/Error**：给出原因与下一步，不只显示 `Error` 或空白区域。
+
+### Commercial finish
+
+- Gradio 原生控件必须统一覆盖输入框、Radio、Checkbox、Slider、Accordion、Gallery 和 Dataframe 状态，不允许出现默认橙色或默认大圆角。
+- 主面板使用白色实体表面、10px 圆角、细边框和两层低透明阴影；内部信息依赖间距分组，不继续嵌套卡片。
+- 顶栏承担品牌识别，页面正文不再重复大尺寸产品标题。
+- 表格、端点、百分比和技术指标使用等宽数字；交互标签使用系统无衬线字体。
 
 ## 5. Interaction and accessibility
 

@@ -34,6 +34,11 @@
 修改作用：依据根目录 DESIGN.md 重构服务器分析工作台视觉层级、响应式布局、图表和状态反馈；
           保持现有 API 与计算流程不变，统一在 7860 提供专业化研究界面。
 使用方式：运行 start_all.py 后打开 7860；窄屏会自动切换为单栏工作区。
+
+修改时间：2026-09-23
+修改作用：二次重构商业视觉风格，增加品牌化应用顶栏、定制表单控件、研究面板、数据表格、
+          画板、图库及状态组件皮肤，消除 Gradio 默认拼装感。
+使用方式：启动方式不变；浏览器刷新 7860 即可加载完整商用风格。
 """
 from __future__ import annotations
 
@@ -60,23 +65,24 @@ _RESULT_LOCK = threading.Lock()
 
 APP_CSS = r"""
 :root {
-  --ms-canvas: #f4f6f8;
+  --ms-canvas: #edf0f4;
   --ms-surface: #ffffff;
-  --ms-surface-subtle: #f8fafc;
-  --ms-ink: #111827;
-  --ms-ink-secondary: #475467;
-  --ms-muted: #667085;
-  --ms-line: #dde3ea;
-  --ms-line-strong: #c9d2dd;
-  --ms-accent: #1769e0;
-  --ms-accent-hover: #1257bd;
-  --ms-accent-soft: #eaf2ff;
+  --ms-surface-subtle: #f6f8fa;
+  --ms-surface-raised: #fbfcfd;
+  --ms-ink: #101828;
+  --ms-ink-secondary: #3d4a5c;
+  --ms-muted: #6b7789;
+  --ms-line: #dfe4ea;
+  --ms-line-strong: #c6ced8;
+  --ms-accent: #0f62fe;
+  --ms-accent-hover: #0043ce;
+  --ms-accent-soft: #edf4ff;
   --ms-success: #12805c;
   --ms-warning: #a86200;
   --ms-danger: #c43d4b;
-  --ms-radius: 12px;
-  --ms-font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  --ms-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --ms-radius: 10px;
+  --ms-font: "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei", ui-sans-serif, sans-serif;
+  --ms-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 body,
@@ -92,117 +98,210 @@ body,
   --primary-200: #bfd8ff;
   --primary-300: #93bcff;
   --primary-400: #5f98f3;
-  --primary-500: #1769e0;
-  --primary-600: #1257bd;
+  --primary-500: #0f62fe;
+  --primary-600: #0043ce;
   --primary-700: #164994;
   --primary-800: #183f78;
   --primary-900: #183663;
   --color-accent: var(--ms-accent);
   --border-color-accent: var(--ms-accent);
-  max-width: 1540px !important;
+  --checkbox-label-background-fill: #ffffff;
+  --checkbox-label-background-fill-hover: #f6f8fa;
+  --checkbox-label-background-fill-selected: #edf4ff;
+  --checkbox-label-border-color: #dfe4ea;
+  --checkbox-label-border-color-selected: #a7c7ff;
+  --checkbox-label-text-color-selected: #0043ce;
+  --checkbox-background-color-selected: #0f62fe;
+  --checkbox-border-color-selected: #0f62fe;
+  --slider-color: #0f62fe;
+  --input-radius: 8px;
+  --block-radius: 10px;
+  --button-large-radius: 8px;
+  --button-small-radius: 7px;
+  max-width: 1600px !important;
+  min-height: 100vh !important;
   margin: 0 auto !important;
-  padding: 24px 28px 48px !important;
+  padding: 0 34px 56px !important;
+  border-inline: 1px solid #e1e5ea;
+  background: #f7f8fa !important;
+  box-shadow: 0 0 40px rgba(16, 24, 40, .035);
 }
 
 #studio-header {
-  margin: 0 0 20px;
+  margin: 0 -34px;
 }
 
 .studio-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 28px;
-  padding: 8px 2px 20px;
+  min-height: 76px;
+  gap: 24px;
+  padding: 0 34px;
   border-bottom: 1px solid var(--ms-line);
+  background: var(--ms-surface);
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 13px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: #101828;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: -.04em;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08), 0 3px 8px rgba(16, 24, 40, .16);
+}
+
+.brand-copy {
+  min-width: 0;
 }
 
 .studio-kicker {
-  margin: 0 0 7px;
-  color: var(--ms-accent);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
+  margin: 0 0 2px;
+  color: var(--ms-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .09em;
 }
 
 .studio-title {
   margin: 0;
   color: var(--ms-ink);
-  font-size: clamp(24px, 3vw, 30px);
-  font-weight: 720;
-  letter-spacing: -.035em;
-  line-height: 1.08;
+  font-size: 17px;
+  font-weight: 690;
+  letter-spacing: -.02em;
+  line-height: 1.2;
 }
 
 .studio-subtitle {
-  max-width: 680px;
-  margin: 9px 0 0;
-  color: var(--ms-ink-secondary);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.endpoint-block {
-  min-width: 252px;
-  text-align: right;
-}
-
-.endpoint-label {
-  display: block;
-  margin-bottom: 6px;
+  margin: 0 0 0 2px;
+  padding-left: 14px;
+  border-left: 1px solid var(--ms-line);
   color: var(--ms-muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.header-meta {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--ms-line);
+  border-radius: 8px;
+  background: var(--ms-surface-raised);
+  overflow: hidden;
+}
+
+.meta-item {
+  min-width: 146px;
+  padding: 9px 12px;
+}
+
+.meta-item + .meta-item {
+  border-left: 1px solid var(--ms-line);
+}
+
+.meta-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ms-muted);
+  font-size: 9px;
   font-weight: 650;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
 
-.endpoint-value {
+.meta-value {
+  display: block;
   color: var(--ms-ink);
   font-family: var(--ms-mono);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 560;
+  white-space: nowrap;
 }
 
-#main-tabs > .tab-nav,
-#settings-tabs > .tab-nav {
-  gap: 24px !important;
+#main-tabs .tab-nav,
+#settings-tabs .tab-nav {
+  gap: 6px !important;
   margin: 0 !important;
-  padding: 0 2px !important;
+  padding: 10px 0 0 !important;
   border-bottom: 1px solid var(--ms-line) !important;
   background: transparent !important;
 }
 
-#main-tabs > .tab-nav button,
-#settings-tabs > .tab-nav button {
-  min-height: 45px !important;
-  padding: 0 2px !important;
+#main-tabs .tab-nav {
+  position: sticky !important;
+  top: 0;
+  z-index: 20;
+  margin-inline: -34px !important;
+  padding-inline: 34px !important;
+  background: rgba(255, 255, 255, .97) !important;
+  box-shadow: 0 1px 0 rgba(16, 24, 40, .02);
+}
+
+#settings-tabs .tab-nav {
+  position: static !important;
+  margin-inline: 0 !important;
+  padding-inline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#main-tabs .tab-nav button,
+#settings-tabs .tab-nav button {
+  min-height: 43px !important;
+  padding: 0 13px !important;
   border: 0 !important;
   border-bottom: 2px solid transparent !important;
   border-radius: 0 !important;
   background: transparent !important;
   color: var(--ms-muted) !important;
-  font-size: 13px !important;
-  font-weight: 620 !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
   box-shadow: none !important;
 }
 
-#main-tabs > .tab-nav button.selected,
-#settings-tabs > .tab-nav button.selected {
+#main-tabs .tab-nav button.selected,
+#settings-tabs .tab-nav button.selected {
   border-bottom-color: var(--ms-accent) !important;
   color: var(--ms-ink) !important;
 }
 
+#main-tabs [role="tab"],
+#settings-tabs [role="tab"] {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: inset 0 -2px 0 transparent !important;
+}
+
+#main-tabs [role="tab"][aria-selected="true"],
+#settings-tabs [role="tab"][aria-selected="true"] {
+  color: var(--ms-accent) !important;
+  box-shadow: inset 0 -2px 0 var(--ms-accent) !important;
+}
+
 .page-intro {
-  padding: 25px 2px 16px;
+  padding: 28px 2px 18px;
 }
 
 .page-intro h2 {
   margin: 0 0 5px !important;
   color: var(--ms-ink) !important;
-  font-size: 17px !important;
-  font-weight: 680 !important;
-  letter-spacing: -.015em;
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  letter-spacing: -.025em;
 }
 
 .page-intro p {
@@ -214,24 +313,35 @@ body,
 
 .workbench-row {
   align-items: stretch !important;
-  gap: 16px !important;
+  gap: 18px !important;
 }
 
 .panel {
-  padding: 18px !important;
+  padding: 20px !important;
   border: 1px solid var(--ms-line) !important;
   border-radius: var(--ms-radius) !important;
   background: var(--ms-surface) !important;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .04) !important;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, .045), 0 1px 2px rgba(16, 24, 40, .035) !important;
 }
 
-.panel-label {
-  margin: 0 0 12px !important;
-  color: var(--ms-muted) !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+.panel-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+}
+
+.panel-heading__title {
+  color: var(--ms-ink);
+  font-size: 13px;
+  font-weight: 690;
+}
+
+.panel-heading__hint {
+  color: var(--ms-muted);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .result-section {
@@ -244,6 +354,7 @@ body,
   border-color: var(--ms-line) !important;
   border-radius: var(--ms-radius) !important;
   background: var(--ms-surface) !important;
+  box-shadow: 0 4px 16px rgba(16, 24, 40, .035) !important;
 }
 
 .status-copy {
@@ -262,7 +373,7 @@ body,
 
 .numeric-table td:not(:nth-child(5)),
 .numeric-table th,
-.endpoint-value {
+.meta-value {
   font-family: var(--ms-mono) !important;
 }
 
@@ -276,19 +387,134 @@ body,
 }
 
 .numeric-table tbody tr:hover td {
-  background: #f6f9fd !important;
+  background: #f3f7fd !important;
+}
+
+.gradio-container .block {
+  border-color: var(--ms-line) !important;
+}
+
+.gradio-container .form,
+.gradio-container input:not([type="radio"]):not([type="checkbox"]):not([type="range"]),
+.gradio-container textarea,
+.gradio-container select {
+  border-color: var(--ms-line) !important;
+  background: #ffffff !important;
+  color: var(--ms-ink) !important;
+  box-shadow: inset 0 1px 1px rgba(16, 24, 40, .02) !important;
+}
+
+.gradio-container .form:focus-within,
+.gradio-container input:focus,
+.gradio-container textarea:focus,
+.gradio-container select:focus {
+  border-color: #7aa7f8 !important;
+  box-shadow: 0 0 0 3px rgba(15, 98, 254, .11) !important;
+}
+
+.gradio-container label {
+  color: var(--ms-ink-secondary) !important;
+  font-size: 12px !important;
+}
+
+.gradio-container label.selected {
+  border-color: #a7c7ff !important;
+  background: var(--ms-accent-soft) !important;
+  color: #0043ce !important;
+}
+
+.gradio-container input[type="radio"]:checked,
+.gradio-container input[type="checkbox"]:checked {
+  border-color: var(--ms-accent) !important;
+  background-color: var(--ms-accent) !important;
+}
+
+.gradio-container input[type="range"] {
+  accent-color: var(--ms-accent) !important;
+}
+
+.gradio-container fieldset {
+  gap: 7px !important;
+}
+
+.gradio-container .wrap label {
+  min-height: 34px;
+  border-radius: 7px !important;
+  box-shadow: none !important;
+}
+
+.gradio-container .wrap label:hover {
+  border-color: var(--ms-line-strong) !important;
+  background: var(--ms-surface-subtle) !important;
+}
+
+.gradio-container .wrap label.selected:hover {
+  border-color: #8ab5ff !important;
+  background: #e4efff !important;
+}
+
+.gradio-container .image-container,
+.gradio-container .image-frame,
+.gradio-container canvas {
+  border-radius: 8px !important;
+}
+
+.gradio-container .gallery {
+  gap: 10px !important;
+  background: var(--ms-surface-raised) !important;
+}
+
+.gradio-container .gallery .thumbnail-item {
+  overflow: hidden;
+  border: 1px solid var(--ms-line) !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  box-shadow: 0 2px 6px rgba(16, 24, 40, .035) !important;
+}
+
+.gradio-container .accordion {
+  overflow: hidden;
+  border: 1px solid var(--ms-line) !important;
+  border-radius: 8px !important;
+  background: var(--ms-surface-raised) !important;
+  box-shadow: none !important;
+}
+
+.gradio-container .accordion > button {
+  background: transparent !important;
+  color: var(--ms-ink-secondary) !important;
+  font-weight: 620 !important;
+}
+
+.gradio-container table td {
+  border-color: #e9edf2 !important;
+  color: var(--ms-ink-secondary) !important;
+  font-size: 12px !important;
+}
+
+.gradio-container table tbody tr:nth-child(even) td {
+  background: #fbfcfd !important;
+}
+
+.gradio-container .plot-container {
+  overflow: hidden;
+  border-radius: 9px !important;
+  background: #ffffff !important;
 }
 
 button.primary {
   border-color: var(--ms-accent) !important;
   background: var(--ms-accent) !important;
   color: #fff !important;
-  box-shadow: none !important;
+  min-height: 42px !important;
+  font-weight: 680 !important;
+  box-shadow: 0 2px 5px rgba(15, 98, 254, .2) !important;
 }
 
 button.primary:hover {
   border-color: var(--ms-accent-hover) !important;
   background: var(--ms-accent-hover) !important;
+  transform: translateY(-1px);
 }
 
 button.stop {
@@ -300,7 +526,19 @@ button.stop {
 
 button.secondary,
 button:not(.primary):not(.stop) {
+  min-height: 40px !important;
+  border-color: var(--ms-line) !important;
+  background: #ffffff !important;
+  color: var(--ms-ink-secondary) !important;
+  font-weight: 620 !important;
   box-shadow: none !important;
+}
+
+button.secondary:hover,
+button:not(.primary):not(.stop):hover {
+  border-color: var(--ms-line-strong) !important;
+  background: var(--ms-surface-subtle) !important;
+  color: var(--ms-ink) !important;
 }
 
 button,
@@ -321,10 +559,11 @@ select:focus-visible,
 }
 
 .data-progress {
-  padding: 14px 16px;
+  padding: 15px 16px;
   border: 1px solid var(--ms-line);
-  border-radius: 10px;
-  background: var(--ms-surface-subtle);
+  border-radius: 9px;
+  background: #ffffff;
+  box-shadow: 0 3px 12px rgba(16, 24, 40, .035);
 }
 
 .data-progress__meta {
@@ -348,10 +587,10 @@ select:focus-visible,
 }
 
 .data-progress__track {
-  height: 6px;
+  height: 4px;
   overflow: hidden;
   border-radius: 3px;
-  background: #e4e9ef;
+  background: #e7ebf0;
 }
 
 .data-progress__fill {
@@ -379,6 +618,15 @@ select:focus-visible,
   font-size: 13px !important;
 }
 
+.settings-copy code {
+  border: 1px solid #e1e6ec;
+  border-radius: 4px;
+  background: #f3f5f8 !important;
+  color: #253349 !important;
+  font-family: var(--ms-mono) !important;
+  font-size: 11px !important;
+}
+
 .log-console textarea {
   border-color: #243141 !important;
   background: #111820 !important;
@@ -388,13 +636,32 @@ select:focus-visible,
   line-height: 1.55 !important;
 }
 
+::selection {
+  background: #cfe0ff;
+  color: #101828;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #bdc6d1 transparent;
+}
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { border-radius: 4px; background: #bdc6d1; }
+*::-webkit-scrollbar-track { background: transparent; }
+
 footer { display: none !important; }
 
 @media (max-width: 900px) {
-  .gradio-container { padding: 16px 14px 36px !important; }
-  .studio-header { align-items: flex-start; flex-direction: column; gap: 16px; }
-  .endpoint-block { min-width: 0; text-align: left; }
-  #main-tabs > .tab-nav, #settings-tabs > .tab-nav {
+  .gradio-container { padding: 0 14px 36px !important; }
+  #studio-header { margin-inline: -14px; }
+  .studio-header { align-items: flex-start; flex-direction: column; gap: 12px; padding: 15px 14px; }
+  .studio-subtitle { display: none; }
+  .header-meta { width: 100%; }
+  .meta-item { flex: 1; min-width: 0; }
+  .meta-value { overflow: hidden; text-overflow: ellipsis; }
+  #main-tabs .tab-nav { margin-inline: -14px !important; padding-inline: 14px !important; }
+  #main-tabs .tab-nav, #settings-tabs .tab-nav {
     gap: 16px !important;
     overflow-x: auto !important;
   }
@@ -528,7 +795,7 @@ def _thumbnail(query: np.ndarray, candidate: np.ndarray) -> Image.Image:
             for index, value in enumerate(values)
         ]
 
-    draw.line(coordinates(candidate), fill="#1769E0", width=4)
+    draw.line(coordinates(candidate), fill="#0F62FE", width=4)
     draw.line(coordinates(query), fill="#C43D4B", width=2)
     return image
 
@@ -588,7 +855,7 @@ def match_shape(sketch: Any, timeframe: str, category: str, top_k: int):
         "name": "手绘走势", "line": {"color": "#C43D4B", "width": 4},
     }]
     gallery, rows, choices = [], [], []
-    colors = ["#1769E0", "#12805C", "#0E7490", "#A86200", "#475467", "#60A5FA"]
+    colors = ["#0F62FE", "#12805C", "#0E7490", "#A86200", "#475467", "#78A9FF"]
     stored: Dict[str, Dict[str, Any]] = {}
     for index, item in enumerate(results, start=1):
         candidate = _curve(item.get("preview_points", []))
@@ -1110,14 +1377,23 @@ def create_app() -> gr.Blocks:
         gr.HTML(
             f"""
             <header class="studio-header">
-              <div>
-                <p class="studio-kicker">Market Pattern Research</p>
-                <h1 class="studio-title">M5 Shape Search</h1>
-                <p class="studio-subtitle">手绘形态识别、量价策略筛选与行情数据管理，在同一研究工作台完成。</p>
+              <div class="brand-lockup">
+                <span class="brand-mark" aria-hidden="true">M5</span>
+                <div class="brand-copy">
+                  <p class="studio-kicker">MARKET INTELLIGENCE</p>
+                  <h1 class="studio-title">Shape Search</h1>
+                </div>
+                <p class="studio-subtitle">形态识别与策略研究工作台</p>
               </div>
-              <div class="endpoint-block">
-                <span class="endpoint-label">Connected API</span>
-                <span class="endpoint-value">{safe_api_base}</span>
+              <div class="header-meta" aria-label="服务信息">
+                <div class="meta-item">
+                  <span class="meta-label">ENGINE</span>
+                  <span class="meta-value">CPU SEARCH</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">API ENDPOINT</span>
+                  <span class="meta-value">{safe_api_base}</span>
+                </div>
               </div>
             </header>
             """,
@@ -1131,7 +1407,10 @@ def create_app() -> gr.Blocks:
                 )
                 with gr.Row(elem_classes=["workbench-row"]):
                     with gr.Column(scale=4, elem_classes=["panel"]):
-                        gr.HTML('<p class="panel-label">01 / Query</p>')
+                        gr.HTML(
+                            '<div class="panel-heading"><span class="panel-heading__title">绘制查询</span>'
+                            '<span class="panel-heading__hint">DRAW INPUT</span></div>'
+                        )
                         sketch = gr.Sketchpad(label="手绘走势", height=410, sources=[])
                         with gr.Row():
                             timeframe = gr.Radio(
@@ -1159,7 +1438,10 @@ def create_app() -> gr.Blocks:
                             sketch_strategy_status = gr.Markdown("", elem_classes=["status-copy"])
                         match_status = gr.Markdown("", elem_classes=["status-copy"])
                     with gr.Column(scale=6, elem_classes=["panel"]):
-                        gr.HTML('<p class="panel-label">02 / Compare</p>')
+                        gr.HTML(
+                            '<div class="panel-heading"><span class="panel-heading__title">匹配预览</span>'
+                            '<span class="panel-heading__hint">NORMALIZED OVERLAY</span></div>'
+                        )
                         comparison = gr.Plot(label="走势叠加", elem_classes=["chart-panel"])
                         gallery = gr.Gallery(
                             label="候选缩略图", columns=2, height=390, object_fit="contain"
@@ -1200,7 +1482,10 @@ def create_app() -> gr.Blocks:
                     '<p>组合真实 OHLCV 量价规则与已保存的手绘形态，按交集或并集快速筛选。</p></section>'
                 )
                 with gr.Column(elem_classes=["panel"]):
-                    gr.HTML('<p class="panel-label">Strategy Builder</p>')
+                    gr.HTML(
+                        '<div class="panel-heading"><span class="panel-heading__title">策略构建器</span>'
+                        '<span class="panel-heading__hint">MULTI-FACTOR SCREEN</span></div>'
+                    )
                     strategy_selector = gr.CheckboxGroup(
                         choices=[], label="选择策略", interactive=True
                     )
