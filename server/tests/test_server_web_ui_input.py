@@ -22,6 +22,10 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-09-23
 修改作用：覆盖策略页可清空数字输入及 1..200 边界归一化。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-24
+修改作用：覆盖手绘板全幅布局和三个主页面稳定工作区的视觉契约。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
@@ -69,6 +73,10 @@ def test_design_contract_and_progress_accessibility():
     assert ".app-button" in APP_CSS
     assert "\nbutton:not(.primary):not(.stop)" not in APP_CSS
     assert "prefers-reduced-motion" in APP_CSS
+    assert "scrollbar-gutter: stable" in APP_CSS
+    assert ".gradio-container > .main" in APP_CSS
+    assert "#main-tabs .main-workspace" in APP_CSS
+    assert "#shape-sketch .image-container" in APP_CSS
     assert 'role="progressbar"' in progress
     assert 'aria-valuenow="42.5"' in progress
     assert "加载 &lt;stock&gt;" in progress

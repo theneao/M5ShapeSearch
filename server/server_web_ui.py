@@ -44,6 +44,11 @@
 修改作用：修复全局按钮样式误伤 Gradio 内部控件及“最多显示”滑块刻度挤连；策略筛选页改为
           条件矩阵、独立命令栏、结果账本与详情栏，并对数量输入做 1..200 服务端归一化。
 使用方式：在策略筛选页选择策略与范围，输入最多显示数量后执行筛选。
+
+修改时间：2026-09-24
+修改作用：将手绘板的真实坐标画布改为与工作区匹配的横向比例，消除仅中央小区域可绘制的问题；
+          桌面端三个主页面共用固定视口工作区与内部滚动槽，避免切换标签时宽高明显跳变。
+使用方式：刷新 7860 后可在手绘板可见白色区域内全幅绘制；切换主标签时页面外框保持稳定。
 """
 from __future__ import annotations
 
@@ -97,6 +102,16 @@ body,
   font-family: var(--ms-font) !important;
 }
 
+html {
+  min-height: 100%;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+body {
+  min-height: 100vh;
+}
+
 .gradio-container {
   --primary-50: #eef5ff;
   --primary-100: #dceaff;
@@ -124,12 +139,18 @@ body,
   --button-large-radius: 8px;
   --button-small-radius: 7px;
   max-width: 1600px !important;
+  width: 100% !important;
   min-height: 100vh !important;
   margin: 0 auto !important;
   padding: 0 34px 56px !important;
   border-inline: 1px solid #e1e5ea;
   background: #f7f8fa !important;
   box-shadow: 0 0 40px rgba(16, 24, 40, .035);
+}
+
+.gradio-container > .main {
+  width: 100% !important;
+  max-width: none !important;
 }
 
 #studio-header {
@@ -255,6 +276,22 @@ body,
   box-shadow: 0 1px 0 rgba(16, 24, 40, .02);
 }
 
+#main-tabs {
+  width: 100%;
+  min-height: calc(100vh - 78px);
+}
+
+#main-tabs .main-workspace {
+  width: 100%;
+  height: calc(100vh - 132px);
+  min-height: calc(100vh - 132px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+}
+
 #settings-tabs .tab-nav {
   position: static !important;
   margin-inline: 0 !important;
@@ -319,6 +356,23 @@ body,
 .workbench-row {
   align-items: stretch !important;
   gap: 18px !important;
+}
+
+#shape-sketch {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+#shape-sketch .image-container {
+  width: 100% !important;
+  background: #ffffff !important;
+}
+
+#shape-sketch .pixi-target,
+#shape-sketch .pixi-target-crop,
+#shape-sketch canvas {
+  max-width: 100% !important;
+  max-height: 100% !important;
 }
 
 .panel {
@@ -812,6 +866,11 @@ footer { display: none !important; }
   .meta-item { flex: 1; min-width: 0; }
   .meta-value { overflow: hidden; text-overflow: ellipsis; }
   #main-tabs .tab-nav { margin-inline: -14px !important; padding-inline: 14px !important; }
+  #main-tabs .main-workspace {
+    height: auto;
+    min-height: calc(100vh - 170px);
+    overflow: visible;
+  }
   #main-tabs .tab-nav, #settings-tabs .tab-nav {
     gap: 16px !important;
     overflow-x: auto !important;
@@ -1564,7 +1623,7 @@ def create_app() -> gr.Blocks:
             elem_id="studio-header",
         )
         with gr.Tabs(elem_id="main-tabs"):
-            with gr.Tab("手绘匹配"):
+            with gr.Tab("手绘匹配", elem_classes=["main-workspace"]):
                 gr.HTML(
                     '<section class="page-intro"><h2>形态检索</h2>'
                     '<p>画出关注的价格路径，服务器将在预加载行情库中完成多尺度召回与精排。</p></section>'
@@ -1575,7 +1634,15 @@ def create_app() -> gr.Blocks:
                             '<div class="panel-heading"><span class="panel-heading__title">绘制查询</span>'
                             '<span class="panel-heading__hint">DRAW INPUT</span></div>'
                         )
-                        sketch = gr.Sketchpad(label="手绘走势", height=410, sources=[])
+                        sketch = gr.Sketchpad(
+                            label="手绘走势",
+                            height=410,
+                            width="100%",
+                            sources=[],
+                            canvas_size=(720, 480),
+                            fixed_canvas=True,
+                            elem_id="shape-sketch",
+                        )
                         with gr.Row():
                             timeframe = gr.Radio(
                                 ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
@@ -1648,7 +1715,7 @@ def create_app() -> gr.Blocks:
                     load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status]
                 )
 
-            with gr.Tab("策略筛选"):
+            with gr.Tab("策略筛选", elem_classes=["main-workspace"]):
                 gr.HTML(
                     '<section class="page-intro"><h2>组合策略筛选</h2>'
                     '<p>组合真实 OHLCV 量价规则与已保存的手绘形态，按交集或并集快速筛选。</p></section>'
@@ -1778,7 +1845,7 @@ def create_app() -> gr.Blocks:
                     outputs=[strategy_detail_plot, strategy_detail_status],
                 )
 
-            with gr.Tab("系统设置"):
+            with gr.Tab("系统设置", elem_classes=["main-workspace"]):
                 gr.HTML(
                     '<section class="page-intro"><h2>系统设置</h2>'
                     '<p>管理设备连接、行情范围与服务器运行状态；配置保存后由 FastAPI 后台执行。</p></section>'

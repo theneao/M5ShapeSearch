@@ -86,6 +86,7 @@ server/tests/mock/*/
 server/tests/ui_artifacts/
 server/tests/ui_review/
 server/tests/strategy_ui_review/
+server/tests/layout_ui_review/
 server/ui_snapshots/
 server/tests/_smoke_real_ui_out.txt
 server/acceptance_report_latest.json
