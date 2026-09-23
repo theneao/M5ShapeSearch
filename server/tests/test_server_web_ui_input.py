@@ -10,12 +10,16 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-08-31
 修改作用：覆盖 composite 缺失时从 layers 选择有效 NumPy 图层的新版 EditorValue 结构。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-23
+修改作用：覆盖专业界面设计契约与可访问进度条，防止视觉重构后退回内联旧样式。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
 import numpy as np
 
-from server_web_ui import _sketch_to_points
+from server_web_ui import APP_CSS, _progress_bar, _sketch_to_points
 
 
 def test_numpy_composite_is_converted_without_boolean_evaluation():
@@ -46,3 +50,14 @@ def test_numpy_layer_fallback_is_converted_without_boolean_evaluation():
     assert len(points) >= 20
     assert points[0][0] == 0.0
     assert points[-1][0] == 1.0
+
+
+def test_design_contract_and_progress_accessibility():
+    progress = _progress_bar(42.5, "running", "加载 <stock>")
+
+    assert "--ms-accent: #1769e0" in APP_CSS
+    assert "prefers-reduced-motion" in APP_CSS
+    assert 'role="progressbar"' in progress
+    assert 'aria-valuenow="42.5"' in progress
+    assert "加载 &lt;stock&gt;" in progress
+    assert "#374151" not in progress

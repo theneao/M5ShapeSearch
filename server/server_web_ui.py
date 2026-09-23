@@ -29,6 +29,11 @@
 修改作用：将原 7861 整体设置页完整合并到 7860，并兼容 ImageEditor 的 layers 回退结构；
           所有图片候选均显式判空，不再对 NumPy 数组求布尔值。
 使用方式：打开 7860，在顶部标签中切换手绘匹配、连接、市场数据和运行状态。
+
+修改时间：2026-09-23
+修改作用：依据根目录 DESIGN.md 重构服务器分析工作台视觉层级、响应式布局、图表和状态反馈；
+          保持现有 API 与计算流程不变，统一在 7860 提供专业化研究界面。
+使用方式：运行 start_all.py 后打开 7860；窄屏会自动切换为单栏工作区。
 """
 from __future__ import annotations
 
@@ -51,6 +56,360 @@ API_BASE = os.environ.get("SHAPE_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 _LAST_RESULTS: Dict[str, Dict[str, Any]] = {}
 _LAST_STRATEGY_RESULTS: Dict[str, Dict[str, Any]] = {}
 _RESULT_LOCK = threading.Lock()
+
+
+APP_CSS = r"""
+:root {
+  --ms-canvas: #f4f6f8;
+  --ms-surface: #ffffff;
+  --ms-surface-subtle: #f8fafc;
+  --ms-ink: #111827;
+  --ms-ink-secondary: #475467;
+  --ms-muted: #667085;
+  --ms-line: #dde3ea;
+  --ms-line-strong: #c9d2dd;
+  --ms-accent: #1769e0;
+  --ms-accent-hover: #1257bd;
+  --ms-accent-soft: #eaf2ff;
+  --ms-success: #12805c;
+  --ms-warning: #a86200;
+  --ms-danger: #c43d4b;
+  --ms-radius: 12px;
+  --ms-font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --ms-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+body,
+.gradio-container {
+  background: var(--ms-canvas) !important;
+  color: var(--ms-ink) !important;
+  font-family: var(--ms-font) !important;
+}
+
+.gradio-container {
+  --primary-50: #eef5ff;
+  --primary-100: #dceaff;
+  --primary-200: #bfd8ff;
+  --primary-300: #93bcff;
+  --primary-400: #5f98f3;
+  --primary-500: #1769e0;
+  --primary-600: #1257bd;
+  --primary-700: #164994;
+  --primary-800: #183f78;
+  --primary-900: #183663;
+  --color-accent: var(--ms-accent);
+  --border-color-accent: var(--ms-accent);
+  max-width: 1540px !important;
+  margin: 0 auto !important;
+  padding: 24px 28px 48px !important;
+}
+
+#studio-header {
+  margin: 0 0 20px;
+}
+
+.studio-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 8px 2px 20px;
+  border-bottom: 1px solid var(--ms-line);
+}
+
+.studio-kicker {
+  margin: 0 0 7px;
+  color: var(--ms-accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.studio-title {
+  margin: 0;
+  color: var(--ms-ink);
+  font-size: clamp(24px, 3vw, 30px);
+  font-weight: 720;
+  letter-spacing: -.035em;
+  line-height: 1.08;
+}
+
+.studio-subtitle {
+  max-width: 680px;
+  margin: 9px 0 0;
+  color: var(--ms-ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.endpoint-block {
+  min-width: 252px;
+  text-align: right;
+}
+
+.endpoint-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ms-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.endpoint-value {
+  color: var(--ms-ink);
+  font-family: var(--ms-mono);
+  font-size: 12px;
+}
+
+#main-tabs > .tab-nav,
+#settings-tabs > .tab-nav {
+  gap: 24px !important;
+  margin: 0 !important;
+  padding: 0 2px !important;
+  border-bottom: 1px solid var(--ms-line) !important;
+  background: transparent !important;
+}
+
+#main-tabs > .tab-nav button,
+#settings-tabs > .tab-nav button {
+  min-height: 45px !important;
+  padding: 0 2px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--ms-muted) !important;
+  font-size: 13px !important;
+  font-weight: 620 !important;
+  box-shadow: none !important;
+}
+
+#main-tabs > .tab-nav button.selected,
+#settings-tabs > .tab-nav button.selected {
+  border-bottom-color: var(--ms-accent) !important;
+  color: var(--ms-ink) !important;
+}
+
+.page-intro {
+  padding: 25px 2px 16px;
+}
+
+.page-intro h2 {
+  margin: 0 0 5px !important;
+  color: var(--ms-ink) !important;
+  font-size: 17px !important;
+  font-weight: 680 !important;
+  letter-spacing: -.015em;
+}
+
+.page-intro p {
+  margin: 0 !important;
+  color: var(--ms-muted) !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+}
+
+.workbench-row {
+  align-items: stretch !important;
+  gap: 16px !important;
+}
+
+.panel {
+  padding: 18px !important;
+  border: 1px solid var(--ms-line) !important;
+  border-radius: var(--ms-radius) !important;
+  background: var(--ms-surface) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04) !important;
+}
+
+.panel-label {
+  margin: 0 0 12px !important;
+  color: var(--ms-muted) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.result-section {
+  margin-top: 16px !important;
+}
+
+.result-section > .block,
+.chart-panel,
+.result-table {
+  border-color: var(--ms-line) !important;
+  border-radius: var(--ms-radius) !important;
+  background: var(--ms-surface) !important;
+}
+
+.status-copy {
+  min-height: 22px;
+  color: var(--ms-ink-secondary) !important;
+  font-size: 13px !important;
+}
+
+.numeric-table table,
+.numeric-table td,
+.numeric-table th,
+.numeric-control input,
+.numeric-control textarea {
+  font-variant-numeric: tabular-nums;
+}
+
+.numeric-table td:not(:nth-child(5)),
+.numeric-table th,
+.endpoint-value {
+  font-family: var(--ms-mono) !important;
+}
+
+.numeric-table thead th {
+  background: var(--ms-surface-subtle) !important;
+  color: var(--ms-muted) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.numeric-table tbody tr:hover td {
+  background: #f6f9fd !important;
+}
+
+button.primary {
+  border-color: var(--ms-accent) !important;
+  background: var(--ms-accent) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+button.primary:hover {
+  border-color: var(--ms-accent-hover) !important;
+  background: var(--ms-accent-hover) !important;
+}
+
+button.stop {
+  border-color: #ead3d7 !important;
+  background: #fff8f8 !important;
+  color: var(--ms-danger) !important;
+  box-shadow: none !important;
+}
+
+button.secondary,
+button:not(.primary):not(.stop) {
+  box-shadow: none !important;
+}
+
+button,
+input,
+textarea,
+select,
+[role="tab"] {
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease !important;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 3px solid rgba(23, 105, 224, .2) !important;
+  outline-offset: 2px !important;
+}
+
+.data-progress {
+  padding: 14px 16px;
+  border: 1px solid var(--ms-line);
+  border-radius: 10px;
+  background: var(--ms-surface-subtle);
+}
+
+.data-progress__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 9px;
+}
+
+.data-progress__label {
+  color: var(--ms-ink);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.data-progress__value {
+  color: var(--ms-ink-secondary);
+  font-family: var(--ms-mono);
+  font-size: 12px;
+}
+
+.data-progress__track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e4e9ef;
+}
+
+.data-progress__fill {
+  width: var(--progress);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ms-accent);
+  transition: width 320ms ease;
+}
+
+.data-progress__message {
+  margin-top: 9px;
+  color: var(--ms-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.data-progress.state-complete .data-progress__fill { background: var(--ms-success); }
+.data-progress.state-error .data-progress__fill,
+.data-progress.state-degraded .data-progress__fill { background: var(--ms-danger); }
+.data-progress.state-running .data-progress__fill { background: var(--ms-accent); }
+
+.settings-copy {
+  color: var(--ms-ink-secondary) !important;
+  font-size: 13px !important;
+}
+
+.log-console textarea {
+  border-color: #243141 !important;
+  background: #111820 !important;
+  color: #cbd5e1 !important;
+  font-family: var(--ms-mono) !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+}
+
+footer { display: none !important; }
+
+@media (max-width: 900px) {
+  .gradio-container { padding: 16px 14px 36px !important; }
+  .studio-header { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .endpoint-block { min-width: 0; text-align: left; }
+  #main-tabs > .tab-nav, #settings-tabs > .tab-nav {
+    gap: 16px !important;
+    overflow-x: auto !important;
+  }
+  .panel { padding: 14px !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+"""
 
 
 def _request(method: str, path: str, timeout: float = 15.0, **kwargs) -> Any:
@@ -154,11 +513,11 @@ def _curve(points: Any, count: int = 128) -> Optional[np.ndarray]:
 
 def _thumbnail(query: np.ndarray, candidate: np.ndarray) -> Image.Image:
     width, height, pad = 320, 160, 14
-    image = Image.new("RGB", (width, height), "white")
+    image = Image.new("RGB", (width, height), "#FFFFFF")
     draw = ImageDraw.Draw(image)
     for ratio in (0.25, 0.5, 0.75):
         y = int(pad + ratio * (height - pad * 2))
-        draw.line((pad, y, width - pad, y), fill="#E5E7EB", width=1)
+        draw.line((pad, y, width - pad, y), fill="#E7EBF0", width=1)
 
     def coordinates(values: np.ndarray):
         return [
@@ -169,8 +528,8 @@ def _thumbnail(query: np.ndarray, candidate: np.ndarray) -> Image.Image:
             for index, value in enumerate(values)
         ]
 
-    draw.line(coordinates(candidate), fill="#2563EB", width=4)
-    draw.line(coordinates(query), fill="#EF4444", width=2)
+    draw.line(coordinates(candidate), fill="#1769E0", width=4)
+    draw.line(coordinates(query), fill="#C43D4B", width=2)
     return image
 
 
@@ -178,12 +537,23 @@ def _plot_data(traces: List[Dict[str, Any]], title: str, height: int = 470) -> P
     payload = {
         "data": traces,
         "layout": {
-            "title": title,
+            "title": {"text": title, "x": 0.015, "xanchor": "left", "font": {"size": 16}},
             "height": height,
-            "xaxis": {"title": "时间序列"},
-            "yaxis": {"title": "归一化价格", "range": [-0.03, 1.03]},
-            "legend": {"orientation": "h", "y": -0.2},
-            "margin": {"l": 55, "r": 20, "t": 55, "b": 95},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "#FFFFFF",
+            "font": {"family": "Inter, Segoe UI, Microsoft YaHei, sans-serif", "color": "#475467", "size": 12},
+            "hovermode": "x unified",
+            "xaxis": {
+                "title": "时间序列", "gridcolor": "#E7EBF0", "linecolor": "#DDE3EA",
+                "zeroline": False, "showline": True,
+            },
+            "yaxis": {
+                "title": "归一化价格", "range": [-0.03, 1.03], "gridcolor": "#E7EBF0",
+                "linecolor": "#DDE3EA", "zeroline": False, "showline": True,
+            },
+            "legend": {"orientation": "h", "y": -0.2, "font": {"size": 11}},
+            "hoverlabel": {"bgcolor": "#111827", "font": {"color": "#FFFFFF"}},
+            "margin": {"l": 55, "r": 20, "t": 58, "b": 95},
         },
     }
     return PlotData(type="plotly", plot=json.dumps(payload, ensure_ascii=False))
@@ -215,10 +585,10 @@ def match_shape(sketch: Any, timeframe: str, category: str, top_k: int):
         return None, [], [], "服务器未返回候选，请检查数据刷新状态", gr.update(choices=[], value=None)
     traces = [{
         "x": list(range(128)), "y": query.tolist(), "type": "scatter", "mode": "lines",
-        "name": "手绘走势", "line": {"color": "#EF4444", "width": 4},
+        "name": "手绘走势", "line": {"color": "#C43D4B", "width": 4},
     }]
     gallery, rows, choices = [], [], []
-    colors = ["#2563EB", "#059669", "#7C3AED", "#D97706", "#0891B2", "#4F46E5"]
+    colors = ["#1769E0", "#12805C", "#0E7490", "#A86200", "#475467", "#60A5FA"]
     stored: Dict[str, Dict[str, Any]] = {}
     for index, item in enumerate(results, start=1):
         candidate = _curve(item.get("preview_points", []))
@@ -288,10 +658,20 @@ def load_kline(selection: str, timeframe: str):
     payload = {
         "data": [trace],
         "layout": {
-            "title": f"{data.get('symbol')} {data.get('name', '')} · {timeframe}",
+            "title": {
+                "text": f"{data.get('symbol')} {data.get('name', '')} · {timeframe}",
+                "x": 0.015,
+                "xanchor": "left",
+                "font": {"size": 16},
+            },
             "height": 480,
-            "xaxis": {"rangeslider": {"visible": True}},
-            "margin": {"l": 55, "r": 20, "t": 55, "b": 50},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "#FFFFFF",
+            "font": {"family": "Inter, Segoe UI, Microsoft YaHei, sans-serif", "color": "#475467", "size": 12},
+            "xaxis": {"rangeslider": {"visible": True}, "gridcolor": "#E7EBF0", "linecolor": "#DDE3EA"},
+            "yaxis": {"gridcolor": "#E7EBF0", "linecolor": "#DDE3EA", "zeroline": False},
+            "hoverlabel": {"bgcolor": "#111827", "font": {"color": "#FFFFFF"}},
+            "margin": {"l": 55, "r": 20, "t": 58, "b": 50},
         },
     }
     return PlotData(type="plotly", plot=json.dumps(payload, ensure_ascii=False)), f"已加载 {len(bars)} 根 K 线"
@@ -472,10 +852,20 @@ def load_strategy_kline(selection: str):
     payload = {
         "data": [trace],
         "layout": {
-            "title": f"{data.get('symbol')} {data.get('name', '')} · {timeframe}",
+            "title": {
+                "text": f"{data.get('symbol')} {data.get('name', '')} · {timeframe}",
+                "x": 0.015,
+                "xanchor": "left",
+                "font": {"size": 16},
+            },
             "height": 520,
-            "xaxis": {"rangeslider": {"visible": True}},
-            "margin": {"l": 55, "r": 20, "t": 55, "b": 50},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "#FFFFFF",
+            "font": {"family": "Inter, Segoe UI, Microsoft YaHei, sans-serif", "color": "#475467", "size": 12},
+            "xaxis": {"rangeslider": {"visible": True}, "gridcolor": "#E7EBF0", "linecolor": "#DDE3EA"},
+            "yaxis": {"gridcolor": "#E7EBF0", "linecolor": "#DDE3EA", "zeroline": False},
+            "hoverlabel": {"bgcolor": "#111827", "font": {"color": "#FFFFFF"}},
+            "margin": {"l": 55, "r": 20, "t": 58, "b": 50},
         },
     }
     return PlotData(type="plotly", plot=json.dumps(payload, ensure_ascii=False)), f"已加载 {len(bars)} 根 K 线"
@@ -545,16 +935,19 @@ def save_config(
 def _progress_bar(progress: float, state: str, message: str) -> str:
     """生成可由 Timer 持续更新的确定型进度条。"""
     progress = min(100.0, max(0.0, progress))
-    color = "#ef4444" if state in {"error", "degraded"} else "#f97316" if progress < 100 else "#22c55e"
+    normalized_state = state if state in {"running", "complete", "error", "degraded"} else "running"
+    if progress >= 100.0 and normalized_state == "running":
+        normalized_state = "complete"
     safe_message = html.escape(str(message))
     return (
-        '<div style="padding:12px 14px;border:1px solid #374151;border-radius:10px;">'
-        f'<div style="display:flex;justify-content:space-between;margin-bottom:7px;">'
-        f'<strong>数据加载</strong><span>{progress:.1f}%</span></div>'
-        '<div style="height:18px;background:#1f2937;border-radius:9px;overflow:hidden;">'
-        f'<div style="height:100%;width:{progress:.1f}%;background:{color};transition:width .35s ease;">'
-        '</div></div>'
-        f'<div style="margin-top:7px;color:#9ca3af;font-size:13px;">{safe_message}</div></div>'
+        f'<div class="data-progress state-{normalized_state}" style="--progress:{progress:.1f}%">'
+        '<div class="data-progress__meta">'
+        '<span class="data-progress__label">数据加载</span>'
+        f'<span class="data-progress__value">{progress:.1f}%</span></div>'
+        '<div class="data-progress__track" role="progressbar" '
+        f'aria-valuenow="{progress:.1f}" aria-valuemin="0" aria-valuemax="100">'
+        '<div class="data-progress__fill"></div></div>'
+        f'<div class="data-progress__message">{safe_message}</div></div>'
     )
 
 
@@ -598,12 +991,13 @@ def add_settings_tabs(app: gr.Blocks) -> None:
 - 手表点击顶部 WiFi 状态进入 **SETTINGS**，或按 B 开启 `M5Shape-*` 热点。
 - 连接热点后打开 `http://192.168.4.1`，在高级选项同时设置 WiFi 和 `Shape Search Server URL`。
 - 服务器 URL 必须使用终端打印的电脑局域网 IP，例如 `http://192.168.x.x:8000`，不能用 `127.0.0.1`。
-        """)
+        """, elem_classes=["settings-copy", "panel"])
 
     with gr.Tab("市场数据"):
         gr.Markdown(
             "**A 股：AKShare；Crypto：Binance Spot Public（无需 API Key）**。"
-            "刷新只在 FastAPI 后台进行，手绘匹配不会重新拉行情。"
+            "刷新只在 FastAPI 后台进行，手绘匹配不会重新拉行情。",
+            elem_classes=["settings-copy"],
         )
         source = gr.Textbox(
             value="AKSHARE + BINANCE_PUBLIC", label="数据源", interactive=False
@@ -622,7 +1016,7 @@ def add_settings_tabs(app: gr.Blocks) -> None:
                 60, 3600, value=300, step=60, label="新 K 线检查周期（秒）"
             )
 
-        gr.Markdown("### A 股")
+        gr.Markdown("### A 股", elem_classes=["page-intro"])
         with gr.Row():
             stock_enabled = gr.Checkbox(value=True, label="启用")
             stock_count = gr.Number(
@@ -635,15 +1029,16 @@ def add_settings_tabs(app: gr.Blocks) -> None:
         with gr.Row():
             stock_sector = gr.Dropdown(["all"], value="all", allow_custom_value=True, label="行业板块")
             sector_button = gr.Button("从 AKShare 刷新板块列表")
-        sector_status = gr.Markdown("")
+        sector_status = gr.Markdown("", elem_classes=["status-copy"])
 
-        gr.Markdown("### 虚拟货币")
+        gr.Markdown("### 虚拟货币", elem_classes=["page-intro"])
         gr.Markdown(
             "Binance `/api/v3/klines` 单次权重 2、最多 1000 根；全市场 24h ticker 权重 80。"
             "默认只使用 1200/6000 weight/min，并监控 `X-MBX-USED-WEIGHT-1M`；"
             "收到 429/418 后严格遵守 `Retry-After`。使用仅市场数据域名及固定 GET 白名单，"
             "不会读取或保存 API Key/Secret。Binance 不提供市值与量比；可按 24h 成交额、"
-            "基础币成交量、成交笔数或涨跌幅排序。"
+            "基础币成交量、成交笔数或涨跌幅排序。",
+            elem_classes=["settings-copy"],
         )
         with gr.Row():
             crypto_enabled = gr.Checkbox(value=True, label="启用")
@@ -672,7 +1067,7 @@ def add_settings_tabs(app: gr.Blocks) -> None:
             save_button = gr.Button("仅保存参数")
             refresh_button = gr.Button("保存并立即后台刷新", variant="primary")
         data_progress = gr.HTML(_progress_bar(0.0, "created", "等待加载状态"))
-        save_status = gr.Markdown("")
+        save_status = gr.Markdown("", elem_classes=["status-copy"])
         config_outputs = [
             timeframes, feature_window, fetch_bars, adaptive, refresh_check_seconds,
             stock_enabled, stock_count, stock_metric, stock_order, stock_sector,
@@ -690,9 +1085,15 @@ def add_settings_tabs(app: gr.Blocks) -> None:
 
     with gr.Tab("运行状态"):
         status_progress = gr.HTML(_progress_bar(0.0, "created", "等待加载状态"))
-        status_markdown = gr.Markdown("")
-        bucket_table = gr.Dataframe(headers=["数据桶", "连续序列数"], interactive=False)
-        logs = gr.Textbox(label="阶段与异常日志（最近 30 条）", lines=12, interactive=False)
+        status_markdown = gr.Markdown("", elem_classes=["status-copy"])
+        bucket_table = gr.Dataframe(
+            headers=["数据桶", "连续序列数"], interactive=False,
+            elem_classes=["numeric-table", "result-table"],
+        )
+        logs = gr.Textbox(
+            label="阶段与异常日志（最近 30 条）", lines=12, interactive=False,
+            elem_classes=["log-console"],
+        )
         status_button = gr.Button("刷新状态")
         status_outputs = [data_progress, status_progress, status_markdown, bucket_table, logs]
         status_button.click(refresh_status, outputs=status_outputs)
@@ -705,138 +1106,189 @@ def add_settings_tabs(app: gr.Blocks) -> None:
 
 def create_app() -> gr.Blocks:
     with gr.Blocks(title="M5 Shape Search") as app:
-        gr.Markdown("# M5 Shape Search")
-        with gr.Tab("手绘匹配"):
-            with gr.Row():
-                with gr.Column(scale=4):
-                    sketch = gr.Sketchpad(label="画板", height=410, sources=[])
-                    with gr.Row():
-                        timeframe = gr.Radio(
-                            ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
-                            value="1d", label="K 线周期",
-                        )
-                        category = gr.Radio(["all", "stock", "crypto"], value="all", label="品类")
-                        top_k = gr.Slider(1, 20, value=10, step=1, label="Top K")
-                    with gr.Row():
-                        match_button = gr.Button("开始服务端匹配", variant="primary")
-                        cancel_button = gr.Button("取消等待", variant="stop")
-                        clear_button = gr.Button("清空")
-                    with gr.Accordion("保存当前手绘为预选策略", open=False):
+        safe_api_base = html.escape(API_BASE)
+        gr.HTML(
+            f"""
+            <header class="studio-header">
+              <div>
+                <p class="studio-kicker">Market Pattern Research</p>
+                <h1 class="studio-title">M5 Shape Search</h1>
+                <p class="studio-subtitle">手绘形态识别、量价策略筛选与行情数据管理，在同一研究工作台完成。</p>
+              </div>
+              <div class="endpoint-block">
+                <span class="endpoint-label">Connected API</span>
+                <span class="endpoint-value">{safe_api_base}</span>
+              </div>
+            </header>
+            """,
+            elem_id="studio-header",
+        )
+        with gr.Tabs(elem_id="main-tabs"):
+            with gr.Tab("手绘匹配"):
+                gr.HTML(
+                    '<section class="page-intro"><h2>形态检索</h2>'
+                    '<p>画出关注的价格路径，服务器将在预加载行情库中完成多尺度召回与精排。</p></section>'
+                )
+                with gr.Row(elem_classes=["workbench-row"]):
+                    with gr.Column(scale=4, elem_classes=["panel"]):
+                        gr.HTML('<p class="panel-label">01 / Query</p>')
+                        sketch = gr.Sketchpad(label="手绘走势", height=410, sources=[])
                         with gr.Row():
-                            sketch_strategy_name = gr.Textbox(
-                                value="我的手绘形态", label="策略名称", max_lines=1
+                            timeframe = gr.Radio(
+                                ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+                                value="1d", label="K 线周期",
                             )
-                            sketch_strategy_threshold = gr.Slider(
-                                0.40, 0.95, value=0.68, step=0.01, label="最低相似度"
+                            category = gr.Radio(
+                                [("全部", "all"), ("A 股", "stock"), ("Crypto", "crypto")],
+                                value="all", label="市场",
                             )
-                            save_sketch_button = gr.Button("保存策略", variant="secondary")
-                        sketch_strategy_status = gr.Markdown("")
-                    match_status = gr.Markdown("")
-                with gr.Column(scale=6):
-                    comparison = gr.Plot(label="对比图")
-                    gallery = gr.Gallery(label="结果缩略图", columns=2, height=390, object_fit="contain")
-            table = gr.Dataframe(
-                headers=["Rank", "Similarity", "Category", "Symbol", "Name", "K", "NCC", "dNCC", "Turning", "ShapeDTW", "Change"],
-                interactive=False,
-            )
-            with gr.Row():
-                selected = gr.Dropdown(label="查看单标的 K 线详情")
-                detail_button = gr.Button("加载详情")
-            detail_plot = gr.Plot(label="单标的 K 线")
-            detail_status = gr.Markdown("")
+                            top_k = gr.Slider(1, 20, value=10, step=1, label="结果数量")
+                        with gr.Row():
+                            match_button = gr.Button("开始匹配", variant="primary")
+                            cancel_button = gr.Button("取消等待", variant="stop")
+                            clear_button = gr.Button("清空画板")
+                        with gr.Accordion("保存为手绘策略", open=False):
+                            with gr.Row():
+                                sketch_strategy_name = gr.Textbox(
+                                    value="我的手绘形态", label="策略名称", max_lines=1
+                                )
+                                sketch_strategy_threshold = gr.Slider(
+                                    0.40, 0.95, value=0.68, step=0.01, label="最低相似度"
+                                )
+                                save_sketch_button = gr.Button("保存策略", variant="secondary")
+                            sketch_strategy_status = gr.Markdown("", elem_classes=["status-copy"])
+                        match_status = gr.Markdown("", elem_classes=["status-copy"])
+                    with gr.Column(scale=6, elem_classes=["panel"]):
+                        gr.HTML('<p class="panel-label">02 / Compare</p>')
+                        comparison = gr.Plot(label="走势叠加", elem_classes=["chart-panel"])
+                        gallery = gr.Gallery(
+                            label="候选缩略图", columns=2, height=390, object_fit="contain"
+                        )
+                with gr.Column(elem_classes=["result-section"]):
+                    table = gr.Dataframe(
+                        headers=[
+                            "Rank", "Similarity", "Category", "Symbol", "Name", "K",
+                            "NCC", "dNCC", "Turning", "ShapeDTW", "Change",
+                        ],
+                        interactive=False,
+                        elem_classes=["numeric-table", "result-table"],
+                    )
+                    with gr.Row():
+                        selected = gr.Dropdown(label="查看单标的 K 线")
+                        detail_button = gr.Button("加载详情", variant="secondary")
+                    detail_plot = gr.Plot(label="单标的 K 线", elem_classes=["chart-panel"])
+                    detail_status = gr.Markdown("", elem_classes=["status-copy"])
 
-            match_event = match_button.click(
-                match_shape,
-                inputs=[sketch, timeframe, category, top_k],
-                outputs=[comparison, gallery, table, match_status, selected],
-            )
-            cancel_button.click(
-                lambda: "已取消页面等待；FastAPI 中已开始的 CPU 精排会很快自行结束。",
-                outputs=match_status,
-                cancels=[match_event],
-            )
-            clear_button.click(lambda: None, outputs=sketch)
-            detail_button.click(load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status])
+                match_event = match_button.click(
+                    match_shape,
+                    inputs=[sketch, timeframe, category, top_k],
+                    outputs=[comparison, gallery, table, match_status, selected],
+                )
+                cancel_button.click(
+                    lambda: "已取消页面等待；FastAPI 中已开始的 CPU 精排会很快自行结束。",
+                    outputs=match_status,
+                    cancels=[match_event],
+                )
+                clear_button.click(lambda: None, outputs=sketch)
+                detail_button.click(
+                    load_kline, inputs=[selected, timeframe], outputs=[detail_plot, detail_status]
+                )
 
-        with gr.Tab("策略筛选"):
-            gr.Markdown(
-                "### Sequoia-X 量价策略 + 保存的手绘形态\n"
-                "六个预设策略严格使用已缓存的真实 OHLCV/成交额；手绘策略只比较每个标的最新结束窗口。"
-                "多选后可取交集（同时满足）或并集（满足任一）。"
-            )
-            strategy_selector = gr.CheckboxGroup(
-                choices=[], label="选择策略", interactive=True
-            )
-            with gr.Row():
-                strategy_combine = gr.Radio(
-                    choices=[("交集：同时满足", "intersection"), ("并集：满足任一", "union")],
-                    value="intersection",
-                    label="组合方式",
+            with gr.Tab("策略筛选"):
+                gr.HTML(
+                    '<section class="page-intro"><h2>组合策略筛选</h2>'
+                    '<p>组合真实 OHLCV 量价规则与已保存的手绘形态，按交集或并集快速筛选。</p></section>'
                 )
-                strategy_category = gr.Radio(
-                    choices=[("A 股", "stock"), ("虚拟货币", "crypto"), ("全部", "all")],
-                    value="stock",
-                    label="市场",
-                )
-                strategy_timeframe = gr.Radio(
-                    ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
-                    value="1d",
-                    label="周期",
-                )
-                strategy_limit = gr.Slider(1, 200, value=100, step=1, label="最多显示")
-            with gr.Row():
-                strategy_screen_button = gr.Button("开始服务端筛选", variant="primary")
-                strategy_cancel_button = gr.Button("停止页面等待", variant="stop")
-                strategy_refresh_button = gr.Button("刷新策略目录")
-            strategy_status = gr.Markdown("")
-            strategy_table = gr.Dataframe(
-                headers=[
-                    "Rank", "Symbol", "Name", "Category", "Price", "Change",
-                    "Coverage", "Score", "Matched Strategies",
-                ],
-                interactive=False,
-            )
-            with gr.Row():
-                strategy_selected = gr.Dropdown(label="查看筛选标的 K 线")
-                strategy_detail_button = gr.Button("加载 K 线详情")
-            strategy_detail_plot = gr.Plot(label="策略筛选结果 K 线")
-            strategy_detail_status = gr.Markdown("")
-            with gr.Accordion("管理手绘策略", open=False):
-                saved_strategy_selector = gr.Dropdown(choices=[], label="已保存的手绘策略")
-                delete_strategy_button = gr.Button("删除所选手绘策略", variant="stop")
+                with gr.Column(elem_classes=["panel"]):
+                    gr.HTML('<p class="panel-label">Strategy Builder</p>')
+                    strategy_selector = gr.CheckboxGroup(
+                        choices=[], label="选择策略", interactive=True
+                    )
+                    with gr.Row():
+                        strategy_combine = gr.Radio(
+                            choices=[("交集：同时满足", "intersection"), ("并集：满足任一", "union")],
+                            value="intersection",
+                            label="组合方式",
+                        )
+                        strategy_category = gr.Radio(
+                            choices=[("A 股", "stock"), ("虚拟货币", "crypto"), ("全部", "all")],
+                            value="stock",
+                            label="市场",
+                        )
+                        strategy_timeframe = gr.Radio(
+                            ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+                            value="1d",
+                            label="周期",
+                        )
+                        strategy_limit = gr.Slider(1, 200, value=100, step=1, label="最多显示")
+                    with gr.Row():
+                        strategy_screen_button = gr.Button("开始筛选", variant="primary")
+                        strategy_cancel_button = gr.Button("停止等待", variant="stop")
+                        strategy_refresh_button = gr.Button("刷新策略目录")
+                    strategy_status = gr.Markdown("", elem_classes=["status-copy"])
+                with gr.Column(elem_classes=["result-section"]):
+                    strategy_table = gr.Dataframe(
+                        headers=[
+                            "Rank", "Symbol", "Name", "Category", "Price", "Change",
+                            "Coverage", "Score", "Matched Strategies",
+                        ],
+                        interactive=False,
+                        elem_classes=["numeric-table", "result-table"],
+                    )
+                    with gr.Row():
+                        strategy_selected = gr.Dropdown(label="查看筛选标的 K 线")
+                        strategy_detail_button = gr.Button("加载 K 线", variant="secondary")
+                    strategy_detail_plot = gr.Plot(
+                        label="策略筛选结果 K 线", elem_classes=["chart-panel"]
+                    )
+                    strategy_detail_status = gr.Markdown("", elem_classes=["status-copy"])
+                    with gr.Accordion("管理手绘策略", open=False):
+                        saved_strategy_selector = gr.Dropdown(
+                            choices=[], label="已保存的手绘策略"
+                        )
+                        delete_strategy_button = gr.Button(
+                            "删除所选手绘策略", variant="stop"
+                        )
 
-            catalog_outputs = [strategy_selector, saved_strategy_selector, strategy_status]
-            app.load(load_strategy_catalog, outputs=catalog_outputs)
-            strategy_refresh_button.click(load_strategy_catalog, outputs=catalog_outputs)
-            save_sketch_button.click(
-                save_sketch_strategy,
-                inputs=[sketch, sketch_strategy_name, sketch_strategy_threshold],
-                outputs=[strategy_selector, saved_strategy_selector, sketch_strategy_status],
-            )
-            delete_strategy_button.click(
-                delete_sketch_strategy,
-                inputs=[saved_strategy_selector],
-                outputs=[strategy_selector, saved_strategy_selector, strategy_status],
-            )
-            strategy_screen_event = strategy_screen_button.click(
-                run_strategy_screen,
-                inputs=[
-                    strategy_selector, strategy_combine, strategy_category,
-                    strategy_timeframe, strategy_limit,
-                ],
-                outputs=[strategy_table, strategy_selected, strategy_status],
-            )
-            strategy_cancel_button.click(
-                lambda: "已停止页面等待；服务器已排队的数据构建会继续完成。",
-                outputs=[strategy_status],
-                cancels=[strategy_screen_event],
-            )
-            strategy_detail_button.click(
-                load_strategy_kline,
-                inputs=[strategy_selected],
-                outputs=[strategy_detail_plot, strategy_detail_status],
-            )
-        add_settings_tabs(app)
+                catalog_outputs = [strategy_selector, saved_strategy_selector, strategy_status]
+                app.load(load_strategy_catalog, outputs=catalog_outputs)
+                strategy_refresh_button.click(load_strategy_catalog, outputs=catalog_outputs)
+                save_sketch_button.click(
+                    save_sketch_strategy,
+                    inputs=[sketch, sketch_strategy_name, sketch_strategy_threshold],
+                    outputs=[strategy_selector, saved_strategy_selector, sketch_strategy_status],
+                )
+                delete_strategy_button.click(
+                    delete_sketch_strategy,
+                    inputs=[saved_strategy_selector],
+                    outputs=[strategy_selector, saved_strategy_selector, strategy_status],
+                )
+                strategy_screen_event = strategy_screen_button.click(
+                    run_strategy_screen,
+                    inputs=[
+                        strategy_selector, strategy_combine, strategy_category,
+                        strategy_timeframe, strategy_limit,
+                    ],
+                    outputs=[strategy_table, strategy_selected, strategy_status],
+                )
+                strategy_cancel_button.click(
+                    lambda: "已停止页面等待；服务器已排队的数据构建会继续完成。",
+                    outputs=[strategy_status],
+                    cancels=[strategy_screen_event],
+                )
+                strategy_detail_button.click(
+                    load_strategy_kline,
+                    inputs=[strategy_selected],
+                    outputs=[strategy_detail_plot, strategy_detail_status],
+                )
+
+            with gr.Tab("系统设置"):
+                gr.HTML(
+                    '<section class="page-intro"><h2>系统设置</h2>'
+                    '<p>管理设备连接、行情范围与服务器运行状态；配置保存后由 FastAPI 后台执行。</p></section>'
+                )
+                with gr.Tabs(elem_id="settings-tabs"):
+                    add_settings_tabs(app)
     return app
 
 
@@ -850,6 +1302,12 @@ def main() -> None:
         server_port=args.port,
         show_error=True,
         inbrowser=False,
+        theme=gr.themes.Base(
+            primary_hue="blue",
+            secondary_hue="blue",
+            neutral_hue="slate",
+        ),
+        css=APP_CSS,
     )
 
 

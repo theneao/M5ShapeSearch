@@ -46,6 +46,7 @@ managed_components/
 # VSCode
 .vscode/
 .cache/
+.codex/
 
 # Python virtual environment
 .venv/
@@ -83,6 +84,7 @@ server/data/cpu_shape_search/saved_shape_strategies.json
 server/data/faiss_indexes/
 server/tests/mock/*/
 server/tests/ui_artifacts/
+server/ui_snapshots/
 server/tests/_smoke_real_ui_out.txt
 server/acceptance_report_latest.json
 server/FINAL_REPORT.txt
