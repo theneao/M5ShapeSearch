@@ -5,17 +5,19 @@
 创建时间：2026-09-15
 作用：验证 Sequoia-X 六个预设条件、手绘策略持久化，以及交集/并集的集合语义。
 使用方式：cd server && python -m pytest tests/test_strategy_service.py -q
+
+修改时间：2026-09-29
+修改作用：验证预设策略兼容虚拟货币，并覆盖 MACD/KDJ 交叉与均线多空排列。
+使用方式：cd server && python -m pytest tests/test_strategy_service.py -q
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
-
 from shape_search.config import CpuSearchConfig
 from shape_search.preprocessing import build_market_series
-from strategy.strategy_service import StrategyService
+from strategy.strategy_service import PRESET_CATALOG, StrategyService
 
 
 def _market(
@@ -27,6 +29,8 @@ def _market(
     low=None,
     volume=None,
     turnover=None,
+    category="stock",
+    timeframe="1d",
 ):
     close = np.asarray(close, dtype=float)
     open_ = np.asarray(open_ if open_ is not None else close, dtype=float)
@@ -38,8 +42,8 @@ def _market(
         series_id=symbol,
         symbol=symbol,
         symbol_name=symbol,
-        category="stock",
-        timeframe="1d",
+        category=category,
+        timeframe=timeframe,
         timestamps=np.arange(1, len(close) + 1),
         values=close,
         values_are_prices=True,
@@ -154,11 +158,46 @@ def test_two_strategy_union_and_intersection_use_exact_symbol_sets(tmp_path):
     assert {item["symbol"] for item in union["list"]} == {"A", "B", "C"}
 
 
-def test_preset_rejects_unsupported_market_before_scanning(tmp_path):
-    market = _market("A", np.linspace(10.0, 20.0, 40), volume=np.ones(40))
-    service = StrategyService(_Manager([market]), tmp_path)
+def test_presets_support_crypto_and_intraday_timeframes(tmp_path):
+    service = StrategyService(_Manager([]), tmp_path)
+    assert all(item["category_support"] == ["stock", "crypto"] for item in PRESET_CATALOG)
+    assert all("15m" in item["timeframe_support"] for item in PRESET_CATALOG)
+    ids, _catalog = service.validate_request(
+        ["sequoia_turtle_trade", "technical_macd_golden_cross"],
+        "intersection", "crypto", "15m",
+    )
+    assert ids == ["sequoia_turtle_trade", "technical_macd_golden_cross"]
 
-    with pytest.raises(ValueError, match="不支持市场 crypto"):
-        service.validate_request(
-            ["sequoia_turtle_trade"], "intersection", "crypto", "1d"
+
+def test_common_indicators_detect_crosses_and_ma_alignments_on_crypto():
+    service = StrategyService.__new__(StrategyService)
+    macd_golden = np.r_[np.linspace(20.0, 10.0, 34), 18.0]
+    macd_death = np.r_[np.linspace(10.0, 20.0, 34), 12.0]
+    kdj_golden = np.r_[np.linspace(20.0, 10.0, 19), 18.0]
+    kdj_death = np.r_[np.linspace(10.0, 20.0, 19), 12.0]
+
+    def crypto_market(symbol, close):
+        close = np.asarray(close)
+        return _market(
+            symbol, close, high=close + 1.0, low=close - 1.0,
+            volume=np.ones(len(close)), category="crypto", timeframe="15m",
         )
+
+    assert service._evaluate_preset(
+        "technical_macd_golden_cross", crypto_market("MACD_G", macd_golden)
+    ) == (True, None)
+    assert service._evaluate_preset(
+        "technical_macd_death_cross", crypto_market("MACD_D", macd_death)
+    ) == (True, None)
+    assert service._evaluate_preset(
+        "technical_kdj_golden_cross", crypto_market("KDJ_G", kdj_golden)
+    ) == (True, None)
+    assert service._evaluate_preset(
+        "technical_kdj_death_cross", crypto_market("KDJ_D", kdj_death)
+    ) == (True, None)
+    assert service._evaluate_preset(
+        "technical_ma_bullish_alignment", crypto_market("BULL", np.linspace(1.0, 60.0, 60))
+    ) == (True, None)
+    assert service._evaluate_preset(
+        "technical_ma_bearish_alignment", crypto_market("BEAR", np.linspace(60.0, 1.0, 60))
+    ) == (True, None)

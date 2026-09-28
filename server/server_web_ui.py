@@ -54,6 +54,10 @@
 修改作用：将服务器工作台升级为 Midnight Graphite 专业视觉系统，统一深石墨材质、悬浮分段导航、
           高级控件状态、暗色图表和宣传视频所需的视觉焦点，同时保持现有信息密度与业务流程。
 使用方式：重启 7860 后强制刷新浏览器；手绘、筛选与设置功能及 API 调用方式不变。
+
+修改时间：2026-09-29
+修改作用：策略目录提示兼容跨市场预设指标，不再把扩展技术指标误称为 Sequoia-X 专属策略。
+使用方式：策略筛选页刷新目录后，可选择同时支持 A 股与虚拟货币的量价及技术指标策略。
 """
 from __future__ import annotations
 
@@ -1442,7 +1446,7 @@ def load_strategy_catalog():
         choices, saved_choices = _strategy_choices(catalog)
         upstream = catalog.get("upstream", {})
         status = (
-            f"已加载 {len(catalog.get('presets', []))} 个 Sequoia-X 量价策略和 "
+            f"已加载 {len(catalog.get('presets', []))} 个量价/技术指标预设和 "
             f"{len(catalog.get('saved_sketches', []))} 个手绘策略。  \n"
             f"上游固定版本：`{upstream.get('commit', '')[:12]}`"
         )

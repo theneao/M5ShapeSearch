@@ -7,6 +7,11 @@
       多策略先独立求命中集合，再显式执行 intersection 或 union。
 使用方式：StrategyService(manager, data_dir).screen(...)；手绘策略通过 save_sketch/delete_sketch 管理。
 
+修改时间：2026-09-29
+修改作用：六个既有量价策略兼容 A 股和虚拟货币的全部受支持周期；新增 MACD/KDJ 金叉、死叉，
+          以及均线多头、空头排列。涨跌停类条件在虚拟货币中使用等价的强势涨跌阈值。
+使用方式：从策略目录选择 technical_* 策略，可与既有策略按交集或并集筛选 stock/crypto。
+
 来源：sngyai/Sequoia-X commit 444c0db69ff36b46ef2b22ab265051d60c16029d（上游 README 声明 MIT）。
 适配原则：只读取当前项目已提交的 OHLCV/turnover 内存快照；缺字段时报告 unavailable，不估算、不放宽条件。
 """
@@ -34,10 +39,10 @@ PRESET_CATALOG: Tuple[Dict[str, Any], ...] = (
         "id": "sequoia_turtle_trade",
         "name": "海龟突破",
         "short_name": "TURTLE",
-        "description": "收盘突破前20日最高价，成交额过亿，且当日阳线真涨",
+        "description": "收盘突破前20根 K 线最高价，量能有效且当前 K 线收阳",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 21,
     },
     {
@@ -46,49 +51,109 @@ PRESET_CATALOG: Tuple[Dict[str, Any], ...] = (
         "short_name": "MA+VOL",
         "description": "MA5 上穿 MA20，且当日成交量大于20日均量1.5倍",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 21,
     },
     {
         "id": "sequoia_high_tight_flag",
         "name": "高窄旗形",
         "short_name": "HTF",
-        "description": "40日涨幅强、近10日高位收敛且缩量",
+        "description": "40根 K 线涨幅强、近10根高位收敛且缩量",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 40,
     },
     {
         "id": "sequoia_limit_up_shakeout",
-        "name": "涨停洗盘",
+        "name": "强势拉升洗盘",
         "short_name": "SHAKEOUT",
-        "description": "昨日涨停，今日放量收阴且最低价不破昨收",
+        "description": "前一根强势拉升，当前放量收阴且最低价不破前收",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 3,
     },
     {
         "id": "sequoia_uptrend_limit_down",
-        "name": "上升趋势跌停",
+        "name": "上升趋势急跌",
         "short_name": "UP-LIMITDN",
-        "description": "MA20 高于 MA60 的上升趋势中出现放量跌停",
+        "description": "MA20 高于 MA60 的上升趋势中出现放量急跌",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 61,
     },
     {
         "id": "sequoia_rps_breakout",
         "name": "RPS 强势突破",
         "short_name": "RPS90",
-        "description": "120日涨幅位于全市场前10%，且收盘接近120日最高价",
+        "description": "120根 K 线涨幅位于同市场前10%，且收盘接近区间最高价",
         "kind": "preset",
-        "category_support": ["stock"],
-        "timeframe_support": ["1d"],
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
         "minimum_bars": 121,
+    },
+    {
+        "id": "technical_macd_golden_cross",
+        "name": "MACD 金叉",
+        "short_name": "MACD GC",
+        "description": "DIF 从下向上穿越 DEA，采用 12/26/9 参数",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 35,
+    },
+    {
+        "id": "technical_macd_death_cross",
+        "name": "MACD 死叉",
+        "short_name": "MACD DC",
+        "description": "DIF 从上向下穿越 DEA，采用 12/26/9 参数",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 35,
+    },
+    {
+        "id": "technical_kdj_golden_cross",
+        "name": "KDJ 金叉",
+        "short_name": "KDJ GC",
+        "description": "K 线从下向上穿越 D 线，采用 9/3/3 参数",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 20,
+    },
+    {
+        "id": "technical_kdj_death_cross",
+        "name": "KDJ 死叉",
+        "short_name": "KDJ DC",
+        "description": "K 线从上向下穿越 D 线，采用 9/3/3 参数",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 20,
+    },
+    {
+        "id": "technical_ma_bullish_alignment",
+        "name": "均线多头排列",
+        "short_name": "MA BULL",
+        "description": "收盘价 > MA5 > MA10 > MA20 > MA60",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 60,
+    },
+    {
+        "id": "technical_ma_bearish_alignment",
+        "name": "均线空头排列",
+        "short_name": "MA BEAR",
+        "description": "收盘价 < MA5 < MA10 < MA20 < MA60",
+        "kind": "preset",
+        "category_support": ["stock", "crypto"],
+        "timeframe_support": ["5m", "15m", "30m", "60m", "4h", "1d", "1w"],
+        "minimum_bars": 60,
     },
 )
 
@@ -107,6 +172,33 @@ def _ohlc(market: MarketSeries, count: int) -> Optional[Tuple[np.ndarray, ...]]:
     if values.shape != (count, 4) or not np.isfinite(values).all():
         return None
     return values[:, 0], values[:, 1], values[:, 2], values[:, 3]
+
+
+def _ema(values: np.ndarray, period: int) -> np.ndarray:
+    result = np.empty(len(values), dtype=np.float64)
+    result[0] = values[0]
+    alpha = 2.0 / (period + 1.0)
+    for index in range(1, len(values)):
+        result[index] = alpha * values[index] + (1.0 - alpha) * result[index - 1]
+    return result
+
+
+def _kdj(market: MarketSeries, count: int = 20) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    data = _ohlc(market, count)
+    if data is None:
+        return None
+    _open, high, low, close = data
+    k_values = np.empty(count, dtype=np.float64)
+    d_values = np.empty(count, dtype=np.float64)
+    k_value = d_value = 50.0
+    for index in range(count):
+        start = max(0, index - 8)
+        lowest, highest = float(np.min(low[start:index + 1])), float(np.max(high[start:index + 1]))
+        rsv = 50.0 if highest <= lowest else (close[index] - lowest) / (highest - lowest) * 100.0
+        k_value = k_value * 2.0 / 3.0 + rsv / 3.0
+        d_value = d_value * 2.0 / 3.0 + k_value / 3.0
+        k_values[index], d_values[index] = k_value, d_value
+    return k_values, d_values
 
 
 class StrategyService:
@@ -208,18 +300,26 @@ class StrategyService:
 
     @staticmethod
     def _evaluate_preset(strategy_id: str, market: MarketSeries) -> Tuple[bool, Optional[str]]:
-        if market.category != "stock" or market.timeframe != "1d":
+        if market.category not in {"stock", "crypto"}:
             return False, "unsupported_market"
 
         if strategy_id == "sequoia_turtle_trade":
             data = _ohlc(market, 21)
-            turnover = _finite_tail(market.turnover_values, 1)
-            if data is None or turnover is None:
-                return False, "missing_ohlc_or_turnover"
+            turnover = _finite_tail(market.turnover_values, 21)
+            liquidity = turnover
+            if liquidity is None:
+                liquidity = _finite_tail(market.volume_values, 21)
+            if data is None or liquidity is None:
+                return False, "missing_ohlcv"
             open_, high, _low, close = data
+            liquid_enough = (
+                liquidity[-1] > 100_000_000
+                if market.category == "stock" and turnover is not None
+                else liquidity[-1] >= np.mean(liquidity[-20:]) * 0.8
+            )
             return bool(
                 close[-1] > np.max(high[-21:-1])
-                and turnover[-1] > 100_000_000
+                and liquid_enough
                 and close[-1] > open_[-1]
                 and close[-1] > close[-2]
             ), None
@@ -258,8 +358,9 @@ class StrategyService:
             if data is None or volume is None:
                 return False, "missing_ohlcv"
             open_, _high, low, close = data
+            strong_gain = 1.095 if market.category == "stock" else 1.08
             return bool(
-                close[-2] >= close[-3] * 1.095
+                close[-2] >= close[-3] * strong_gain
                 and close[-1] < open_[-1]
                 and volume[-1] > volume[-2] * 2.0
                 and low[-1] >= close[-2]
@@ -271,20 +372,51 @@ class StrategyService:
             if data is None or volume is None:
                 return False, "missing_ohlcv"
             close = data[3]
+            sharp_drop = 0.905 if market.category == "stock" else 0.92
             return bool(
                 np.mean(close[-21:-1]) > np.mean(close[-61:-1])
-                and close[-1] <= close[-2] * 0.905
+                and close[-1] <= close[-2] * sharp_drop
                 and volume[-1] > np.mean(volume) * 2.0
             ), None
+
+        if strategy_id in {"technical_macd_golden_cross", "technical_macd_death_cross"}:
+            data = _ohlc(market, 35)
+            if data is None:
+                return False, "missing_ohlc"
+            close = data[3]
+            dif = _ema(close, 12) - _ema(close, 26)
+            dea = _ema(dif, 9)
+            if strategy_id == "technical_macd_golden_cross":
+                return bool(dif[-2] <= dea[-2] and dif[-1] > dea[-1]), None
+            return bool(dif[-2] >= dea[-2] and dif[-1] < dea[-1]), None
+
+        if strategy_id in {"technical_kdj_golden_cross", "technical_kdj_death_cross"}:
+            values = _kdj(market)
+            if values is None:
+                return False, "missing_ohlc"
+            k_values, d_values = values
+            if strategy_id == "technical_kdj_golden_cross":
+                return bool(k_values[-2] <= d_values[-2] and k_values[-1] > d_values[-1]), None
+            return bool(k_values[-2] >= d_values[-2] and k_values[-1] < d_values[-1]), None
+
+        if strategy_id in {"technical_ma_bullish_alignment", "technical_ma_bearish_alignment"}:
+            data = _ohlc(market, 60)
+            if data is None:
+                return False, "missing_ohlc"
+            close = data[3]
+            values = [float(close[-1]), *[float(np.mean(close[-period:])) for period in (5, 10, 20, 60)]]
+            if strategy_id == "technical_ma_bullish_alignment":
+                return all(left > right for left, right in zip(values, values[1:])), None
+            return all(left < right for left, right in zip(values, values[1:])), None
 
         raise KeyError(strategy_id)
 
     @staticmethod
     def _evaluate_rps(markets: Iterable[MarketSeries]) -> Tuple[Dict[str, float], int]:
-        usable: List[Tuple[MarketSeries, float, float]] = []
+        grouped: Dict[str, List[Tuple[MarketSeries, float, float]]] = {}
         unavailable = 0
         for market in markets:
-            if market.category != "stock" or market.timeframe != "1d":
+            if market.category not in {"stock", "crypto"}:
                 continue
             data = _ohlc(market, 121)
             if data is None:
@@ -292,15 +424,19 @@ class StrategyService:
                 continue
             high, close = data[1], data[3]
             performance = float(close[-1] / close[-121] - 1.0)
-            usable.append((market, performance, float(np.max(high[-120:]))))
-        if not usable:
+            grouped.setdefault(market.category, []).append(
+                (market, performance, float(np.max(high[-120:])))
+            )
+        if not grouped:
             return {}, unavailable
-        ranks = rankdata([item[1] for item in usable], method="average") / len(usable) * 100.0
-        matches = {
-            market.symbol: float(rank / 100.0)
-            for (market, _performance, rolling_high), rank in zip(usable, ranks)
-            if rank >= 90.0 and float(market.source_values[-1]) >= rolling_high * 0.90
-        }
+        matches: Dict[str, float] = {}
+        for usable in grouped.values():
+            ranks = rankdata([item[1] for item in usable], method="average") / len(usable) * 100.0
+            matches.update({
+                market.symbol: float(rank / 100.0)
+                for (market, _performance, rolling_high), rank in zip(usable, ranks)
+                if rank >= 90.0 and float(market.source_values[-1]) >= rolling_high * 0.90
+            })
         return matches, unavailable
 
     def _evaluate_sketch(
