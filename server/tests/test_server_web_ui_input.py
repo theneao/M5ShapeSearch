@@ -26,6 +26,10 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-09-24
 修改作用：覆盖手绘板全幅布局和三个主页面稳定工作区的视觉契约。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-29
+修改作用：覆盖 Midnight Graphite 高级视觉令牌、深色组件皮肤和动效降级契约。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
@@ -67,8 +71,9 @@ def test_numpy_layer_fallback_is_converted_without_boolean_evaluation():
 def test_design_contract_and_progress_accessibility():
     progress = _progress_bar(42.5, "running", "加载 <stock>")
 
-    assert "--ms-accent: #0f62fe" in APP_CSS
-    assert "--checkbox-label-background-fill-selected: #edf4ff" in APP_CSS
+    assert "--ms-canvas: #07090d" in APP_CSS
+    assert "--ms-accent: #0a84ff" in APP_CSS
+    assert "--checkbox-label-background-fill-selected: rgba(10, 132, 255, .14)" in APP_CSS
     assert ".brand-lockup" in APP_CSS
     assert ".app-button" in APP_CSS
     assert "\nbutton:not(.primary):not(.stop)" not in APP_CSS
@@ -77,6 +82,9 @@ def test_design_contract_and_progress_accessibility():
     assert ".gradio-container > .main" in APP_CSS
     assert "#main-tabs .main-workspace" in APP_CSS
     assert "#shape-sketch .image-container" in APP_CSS
+    assert ".research-panel" in APP_CSS
+    assert ".candidate-gallery" in APP_CSS
+    assert "@keyframes workspace-enter" in APP_CSS
     assert 'role="progressbar"' in progress
     assert 'aria-valuenow="42.5"' in progress
     assert "加载 &lt;stock&gt;" in progress
