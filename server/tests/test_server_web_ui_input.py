@@ -30,6 +30,10 @@ Gradio 手绘输入兼容测试。
 修改时间：2026-09-29
 修改作用：覆盖 Midnight Graphite 高级视觉令牌、深色组件皮肤和动效降级契约。
 使用方式：保持上述命令不变。
+
+修改时间：2026-09-30
+修改作用：覆盖主工作区使用单一文档滚动，防止固定高度嵌套滚动再次造成页面两侧无法滑到底。
+使用方式：保持上述命令不变。
 """
 from __future__ import annotations
 
@@ -81,6 +85,10 @@ def test_design_contract_and_progress_accessibility():
     assert "scrollbar-gutter: stable" in APP_CSS
     assert ".gradio-container > .main" in APP_CSS
     assert "#main-tabs .main-workspace" in APP_CSS
+    workspace_css = APP_CSS.split("#main-tabs .main-workspace {", 1)[1].split("}", 1)[0]
+    assert "height: auto" in workspace_css
+    assert "overflow: visible" in workspace_css
+    assert "overflow-y: auto" not in workspace_css
     assert "#shape-sketch .image-container" in APP_CSS
     assert ".research-panel" in APP_CSS
     assert ".candidate-gallery" in APP_CSS

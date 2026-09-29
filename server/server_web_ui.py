@@ -58,6 +58,10 @@
 修改时间：2026-09-29
 修改作用：策略目录提示兼容跨市场预设指标，不再把扩展技术指标误称为 Sequoia-X 专属策略。
 使用方式：策略筛选页刷新目录后，可选择同时支持 A 股与虚拟货币的量价及技术指标策略。
+
+修改时间：2026-09-30
+修改作用：移除桌面端主工作区的嵌套滚动上下文，左右留白、面板和画板区域均统一驱动页面滚动。
+使用方式：刷新 7860 后，可在页面任意横向位置使用滚轮或触控滑动到底部。
 """
 from __future__ import annotations
 
@@ -366,12 +370,9 @@ body {
 
 #main-tabs .main-workspace {
   width: 100%;
-  height: calc(100vh - 132px);
+  height: auto;
   min-height: calc(100vh - 132px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: visible;
   box-sizing: border-box;
   animation: workspace-enter 520ms cubic-bezier(.2, .8, .2, 1) both;
 }
