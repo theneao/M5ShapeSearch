@@ -18,10 +18,13 @@
 #include "shape_match_service.h"
 
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/task.h>
 #include <algorithm>
 #include <memory>
+#include <new>
 
 namespace stock_selector {
 namespace {
@@ -30,6 +33,20 @@ constexpr const char* kTag = "ShapeService";
 constexpr int64_t kMatchTimeoutUs = 75LL * 1000 * 1000;
 constexpr int64_t kDetailTimeoutUs = 20LL * 1000 * 1000;
 constexpr int64_t kDataBuildTimeoutUs = 15LL * 60 * 1000 * 1000;
+constexpr int kHardwareResultLimit = 10;
+
+void logWorkerMemory(const char* stage)
+{
+    ESP_LOGI(
+        kTag,
+        "[MEM] %s internal_free=%u largest=%u psram_free=%u stack_low=%u",
+        stage,
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr))
+    );
+}
 
 float jsonFloat(JsonVariantConst value, float fallback = 0.0f)
 {
@@ -42,15 +59,21 @@ ShapeMatchService::ShapeMatchService()
 {
     _queue = xQueueCreate(3, sizeof(Request*));
     if (_queue != nullptr) {
-        xTaskCreatePinnedToCore(
+        const BaseType_t created = xTaskCreatePinnedToCore(
             &ShapeMatchService::workerEntry,
             "shape_http_worker",
-            12 * 1024,
+            16 * 1024,
             this,
             3,
             &_worker,
             0
         );
+        if (created != pdPASS) {
+            ESP_LOGE(kTag, "Cannot create HTTP worker with 16 KB stack");
+            vQueueDelete(_queue);
+            _queue = nullptr;
+            _worker = nullptr;
+        }
     }
 }
 
@@ -98,7 +121,10 @@ bool ShapeMatchService::submitMatch(
     if (_queue == nullptr || points.size() < 3 || isBusy()) {
         return false;
     }
-    auto* request = new Request();
+    auto* request = new (std::nothrow) Request();
+    if (request == nullptr) {
+        return false;
+    }
     request->type = RequestType::Match;
     request->points = points;
     request->category = category;
@@ -119,7 +145,10 @@ bool ShapeMatchService::submitDetail(const MatchResult& result, const std::strin
     if (_queue == nullptr || result.symbol.empty() || isBusy()) {
         return false;
     }
-    auto* request = new Request();
+    auto* request = new (std::nothrow) Request();
+    if (request == nullptr) {
+        return false;
+    }
     request->type = RequestType::Detail;
     request->selected = result;
     request->timeframe = timeframe;
@@ -139,7 +168,10 @@ bool ShapeMatchService::submitStrategyCatalog()
     if (_queue == nullptr || isBusy()) {
         return false;
     }
-    auto* request = new Request();
+    auto* request = new (std::nothrow) Request();
+    if (request == nullptr) {
+        return false;
+    }
     request->type = RequestType::StrategyCatalog;
     request->generation = _generation.fetch_add(1) + 1;
     if (xQueueSend(_queue, &request, 0) != pdTRUE) {
@@ -162,13 +194,16 @@ bool ShapeMatchService::submitStrategyScreen(
     if (_queue == nullptr || strategyIds.empty() || isBusy()) {
         return false;
     }
-    auto* request = new Request();
+    auto* request = new (std::nothrow) Request();
+    if (request == nullptr) {
+        return false;
+    }
     request->type = RequestType::StrategyScreen;
     request->strategyIds = strategyIds;
     request->intersection = intersection;
     request->category = category;
     request->timeframe = timeframe;
-    request->limit = std::clamp(limit, 1, 30);
+    request->limit = std::clamp(limit, 1, kHardwareResultLimit);
     request->generation = _generation.fetch_add(1) + 1;
     if (xQueueSend(_queue, &request, 0) != pdTRUE) {
         delete request;
@@ -187,7 +222,10 @@ bool ShapeMatchService::submitSaveStrategy(
     if (_queue == nullptr || points.size() < 3 || isBusy()) {
         return false;
     }
-    auto* request = new Request();
+    auto* request = new (std::nothrow) Request();
+    if (request == nullptr) {
+        return false;
+    }
     request->type = RequestType::SaveStrategy;
     request->points = points;
     request->limit = static_cast<int>(std::clamp(threshold, 0.0f, 1.0f) * 1000.0f);
@@ -572,6 +610,7 @@ void ShapeMatchService::executeStrategyCatalog(const Request& request)
 
 void ShapeMatchService::executeStrategyScreen(const Request& request)
 {
+    logWorkerMemory("strategy-start");
     JsonDocument document;
     JsonArray ids = document["strategy_ids"].to<JsonArray>();
     for (const auto& id : request.strategyIds) {
@@ -622,7 +661,11 @@ void ShapeMatchService::executeStrategyScreen(const Request& request)
     }
     std::vector<MatchResult> parsed;
     const JsonArrayConst items = payload["data"]["list"].as<JsonArrayConst>();
+    parsed.reserve(std::min<std::size_t>(items.size(), static_cast<std::size_t>(request.limit)));
     for (JsonObjectConst item : items) {
+        if (parsed.size() >= static_cast<std::size_t>(request.limit)) {
+            break;
+        }
         MatchResult result;
         result.symbol = item["symbol"] | "";
         result.name = item["name"] | "";
@@ -641,6 +684,7 @@ void ShapeMatchService::executeStrategyScreen(const Request& request)
         _match_results = std::move(parsed);
         _query_ms = payload["data"]["query_ms"] | 0;
     }
+    logWorkerMemory("strategy-ready");
     _started_us.store(0);
     _state.store(State::StrategyReady);
 }

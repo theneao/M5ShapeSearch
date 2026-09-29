@@ -81,10 +81,12 @@ void AppStockSelector::onOpen()
         const std::string& category,
         const std::string& timeframe
     ) {
-        if (_service.submitStrategyScreen(ids, intersection, category, timeframe, 20)) {
+        // 圆屏只展示 Top10。避免策略响应后一次创建过多卡片及文本对象，
+        // 在 JSON 文档仍占用内存时把 LVGL 堆推到临界点。
+        if (_service.submitStrategyScreen(ids, intersection, category, timeframe, 10)) {
             _view->setBusy(true, "FILTERING ON SERVER");
         } else {
-            _view->showError("Strategy request queue is busy");
+            _view->showError("Cannot start filter; retry shortly");
         }
     };
     _view->onSaveStrategyRequested = [this](

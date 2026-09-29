@@ -474,7 +474,9 @@ void StockSelectorView::updateStrategySelectionUi(int changedIndex)
 {
     if (changedIndex >= 0 && changedIndex < static_cast<int>(_strategies.size()) &&
         changedIndex < static_cast<int>(_strategy_buttons.size()) &&
-        changedIndex < static_cast<int>(_strategy_check_labels.size())) {
+        changedIndex < static_cast<int>(_strategy_check_labels.size()) &&
+        lv_obj_is_valid(_strategy_buttons[changedIndex]) &&
+        lv_obj_is_valid(_strategy_check_labels[changedIndex])) {
         const bool selected = _strategies[changedIndex].selected;
         lv_obj_set_style_bg_color(
             _strategy_buttons[changedIndex],
@@ -489,13 +491,13 @@ void StockSelectorView::updateStrategySelectionUi(int changedIndex)
         );
     }
 
-    if (_strategy_mode_button != nullptr) {
+    if (_strategy_mode_button != nullptr && lv_obj_is_valid(_strategy_mode_button)) {
         lv_obj_t* label = lv_obj_get_child(_strategy_mode_button, 0);
         if (label != nullptr) {
             lv_label_set_text(label, _strategy_intersection ? "MODE: AND" : "MODE: OR");
         }
     }
-    if (_strategy_summary_label != nullptr) {
+    if (_strategy_summary_label != nullptr && lv_obj_is_valid(_strategy_summary_label)) {
         char market[64] = {};
         std::snprintf(market, sizeof(market), "%s  %s  |  %u SELECTED",
                       _category.c_str(), _timeframe.c_str(),

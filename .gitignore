@@ -103,7 +103,7 @@ server/logs/
 .gradio/
 server/.gradio/
 
-# Local crash/core dumps produced while diagnosing device or native failures
+# Local crash/core dumps and serial captures produced while diagnosing device strategy-filter/native failures
 core.*
 *.dmp
 device_logs/
