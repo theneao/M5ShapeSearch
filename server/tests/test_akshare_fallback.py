@@ -17,6 +17,9 @@ AKShare A 股故障切换测试。
 
 修改时间：2026-09-15
 修改作用：行情数组扩展为固定七列 OHLCV+turnover，并验证备用源缺失成交额时保持 NaN。
+
+修改时间：2026-09-30
+修改作用：验证行业板块 AKShare 请求受代理影响时，使用禁用环境代理且带硬超时的同源直连重试。
 """
 from __future__ import annotations
 
@@ -26,6 +29,56 @@ from types import SimpleNamespace
 import pandas as pd
 
 from core import akshare_data_builder as builder
+
+
+def test_sector_list_retries_direct_without_environment_proxy(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_board_industry_name_em=lambda: (_ for _ in ()).throw(
+                ConnectionError("proxy down")
+            )
+        ),
+    )
+    calls = []
+
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "diff": [
+                        {"f12": "BK0002", "f14": "软件开发"},
+                        {"f12": "BK0001", "f14": "银行"},
+                    ]
+                }
+            }
+
+    class FakeSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs, self.trust_env))
+            return FakeResponse()
+
+    import requests
+    monkeypatch.setattr(requests, "Session", FakeSession)
+
+    assert builder.list_stock_sectors() == ["软件开发", "银行"]
+    assert calls[0][0].startswith("https://17.push2.eastmoney.com/")
+    assert calls[0][1]["timeout"] == (4, 10)
+    assert calls[0][2] is False
 
 
 def test_stock_pool_falls_back_to_sina_volume(monkeypatch):
@@ -43,6 +96,24 @@ def test_stock_pool_falls_back_to_sina_volume(monkeypatch):
     selected = builder.select_stock_pool(2, "market_cap", "top")
 
     assert selected == [("SZ:000002", "B"), ("BJ:920003", "C")]
+
+
+def test_sector_filter_is_applied_to_sina_fallback_pool(monkeypatch):
+    frame = pd.DataFrame({
+        "代码": ["sh600001", "sz000002", "bj920003"],
+        "名称": ["A", "B", "C"],
+        "成交量": [10.0, 30.0, 20.0],
+    })
+    fake_ak = SimpleNamespace(
+        stock_zh_a_spot_em=lambda: (_ for _ in ()).throw(ConnectionError("eastmoney down")),
+        stock_zh_a_spot=lambda: frame,
+    )
+    monkeypatch.setitem(sys.modules, "akshare", fake_ak)
+    monkeypatch.setattr(builder, "_stock_sector_codes", lambda _ak, _sector: {"000002"})
+
+    selected = builder.select_stock_pool(10, "volume", "top", sector="软件开发")
+
+    assert selected == [("SZ:000002", "B")]
 
 
 def test_daily_kline_falls_back_to_tencent(monkeypatch):

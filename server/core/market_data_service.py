@@ -51,6 +51,10 @@
 修改作用：目标周期首次建库且实时选池失败时，可复用任意已建 A 股周期的去重标的池；
           不再要求该目标周期必须已有缓存，新浪快照偶发解析失败也能继续下载 K 线。
 使用方式：刷新线程自动注入跨周期 _fallback_stock_pool，无需页面或客户端改动。
+
+修改时间：2026-09-30
+修改作用：行业板块实时刷新失败时保留并返回最后一次成功缓存，同时记录 live/cache/cache_fallback 来源。
+使用方式：list_sectors() 返回值不变；sector_list_source 属性供 API 和页面提示当前来源。
 """
 from __future__ import annotations
 
@@ -202,6 +206,7 @@ class MarketDataService:
         self._pending_categories: Dict[str, set[str]] = {}
         self._active_categories: Dict[str, set[str]] = {}
         self._last_on_demand_attempt: Dict[str, float] = {}
+        self.sector_list_source = "none"
         self._config = self._load_json(self.config_path, DEFAULT_CONFIG)
         self._config = normalize_config(self._config)
         self._manifest = self._load_json(self.manifest_path, {})
@@ -426,12 +431,24 @@ class MarketDataService:
         return not already_running
 
     def list_sectors(self, refresh: bool = False) -> List[str]:
-        if not refresh:
-            cached = self._load_json(self.sectors_path, {}).get("items", [])
-            if cached:
-                return [str(item) for item in cached]
-        sectors = list_stock_sectors()
+        cached = self._load_json(self.sectors_path, {}).get("items", [])
+        cached = [str(item) for item in cached if str(item)]
+        if not refresh and cached:
+            self.sector_list_source = "cache"
+            return cached
+        try:
+            sectors = list_stock_sectors()
+        except Exception as exc:
+            if not cached:
+                raise
+            self.sector_list_source = "cache_fallback"
+            self._append_log(
+                f"[SECTORS][CACHE] 实时板块源不可用，保留 {len(cached)} 个缓存板块："
+                f"{type(exc).__name__}"
+            )
+            return cached
         self._save_json(self.sectors_path, {"updated_at": int(time.time()), "items": sectors})
+        self.sector_list_source = "live"
         return sectors
 
     def _append_log(self, message: str) -> None:

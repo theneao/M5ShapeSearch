@@ -26,6 +26,9 @@
 
 修改时间：2026-08-31
 修改作用：验证目标周期首次建库时可复用其他 A 股周期的缓存标的池。
+
+修改时间：2026-09-30
+修改作用：验证行业板块实时刷新失败时返回最后一次成功缓存，并标记 cache_fallback 来源。
 """
 from __future__ import annotations
 
@@ -91,6 +94,23 @@ def test_normalize_config_keeps_zero_as_all_and_crypto_metric():
     assert config["crypto"]["count"] == 0
     assert config["stock"]["rank_metric"] == "volume"
     assert config["crypto"]["rank_metric"] == "trade_count"
+
+
+def test_sector_refresh_failure_keeps_last_successful_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_AUTO_REFRESH", "0")
+    service = MarketDataService(CpuShapeSearchManager(str(tmp_path)))
+    service._save_json(
+        service.sectors_path,
+        {"updated_at": 1, "items": ["银行", "软件开发"]},
+    )
+    monkeypatch.setattr(
+        "core.market_data_service.list_stock_sectors",
+        lambda: (_ for _ in ()).throw(ConnectionError("all sources down")),
+    )
+
+    assert service.list_sectors(refresh=True) == ["银行", "软件开发"]
+    assert service.sector_list_source == "cache_fallback"
+    assert "[SECTORS][CACHE]" in "\n".join(service.status()["logs"])
 
 
 def test_unverified_legacy_cache_is_not_loaded(tmp_path, monkeypatch):

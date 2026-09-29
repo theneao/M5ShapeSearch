@@ -51,6 +51,11 @@ AKShare A 股 + Binance Public Crypto 市场数据构建器。
 修改作用：行情数组从 OHLC 扩展为 OHLCV+turnover；只采集数据源真实字段，缺失成交额保持 NaN，供预设策略准确判断可计算性。
 使用方式：返回列固定为 [ts, open, high, low, close, volume, turnover]。
 
+修改时间：2026-09-30
+修改作用：AKShare 行业列表和成分股遇到失效系统代理时，使用同一东方财富公开端点直连重试；
+          直连会禁用 requests 环境代理并设置硬超时，列表最终可降级到 AKShare 同花顺行业表。
+使用方式：list_stock_sectors() 与行业选池自动切换，无需页面配置代理。
+
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -265,6 +270,71 @@ def _numeric(frame: Any, column: str):
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _eastmoney_clist_direct(host: str, params: Dict[str, str]) -> List[Dict[str, Any]]:
+    """直连 AKShare 使用的东方财富 clist 端点，避免继承失效的系统代理。"""
+    import requests
+
+    with requests.Session() as session:
+        session.trust_env = False
+        response = session.get(
+            f"https://{host}.push2.eastmoney.com/api/qt/clist/get",
+            params=params,
+            headers={"Referer": "https://quote.eastmoney.com/"},
+            timeout=(4, 10),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    diff = (payload.get("data") or {}).get("diff") or []
+    rows = list(diff.values()) if isinstance(diff, dict) else list(diff)
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _direct_stock_sector_catalog() -> List[Tuple[str, str]]:
+    rows = _eastmoney_clist_direct(
+        "17",
+        {
+            "pn": "1", "pz": "100", "po": "1", "np": "1",
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": "2", "invt": "2",
+            "fid": "f3", "fs": "m:90 t:2 f:!50", "fields": "f12,f14",
+        },
+    )
+    return [
+        (str(row.get("f12", "")).strip(), str(row.get("f14", "")).strip())
+        for row in rows if str(row.get("f12", "")).strip() and str(row.get("f14", "")).strip()
+    ]
+
+
+def _direct_stock_sector_members(sector: str) -> set[str]:
+    sector = str(sector).strip()
+    code = sector if sector.upper().startswith("BK") else next(
+        (item_code for item_code, name in _direct_stock_sector_catalog() if name == sector), ""
+    )
+    if not code:
+        raise RuntimeError(f"未找到行业板块: {sector}")
+    rows = _eastmoney_clist_direct(
+        "29",
+        {
+            "pn": "1", "pz": "5000", "po": "1", "np": "1",
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": "2", "invt": "2",
+            "fid": "f3", "fs": f"b:{code} f:!50", "fields": "f12,f14",
+        },
+    )
+    return {str(row.get("f12", "")).strip().zfill(6) for row in rows if row.get("f12")}
+
+
+def _stock_sector_codes(ak: Any, sector: str) -> set[str]:
+    try:
+        members = ak.stock_board_industry_cons_em(symbol=sector)
+        if members is None or "代码" not in members.columns:
+            raise RuntimeError(f"行业板块 {sector} 未返回有效成分股")
+        codes = {str(value).strip().zfill(6) for value in members["代码"].dropna()}
+    except Exception:
+        codes = _direct_stock_sector_members(sector)
+    if not codes:
+        raise RuntimeError(f"行业板块 {sector} 未返回有效成分股")
+    return codes
+
+
 def _stock_symbol(code: str) -> str:
     code = str(code).strip().lower()
     explicit_exchange = code[:2] if code.startswith(("sh", "sz", "bj")) else ""
@@ -286,6 +356,7 @@ def _select_stock_pool_sina(
     order: str,
     log: Optional[LogCallback],
     original_error: Exception,
+    member_codes: Optional[set[str]] = None,
 ) -> List[Tuple[str, str]]:
     """东财全市场快照不可用时，用 AKShare 新浪快照按真实成交量保证首次建库。"""
     import akshare as ak
@@ -296,6 +367,8 @@ def _select_stock_pool_sina(
     required = {"代码", "名称", "成交量"}
     if frame is None or not required.issubset(set(frame.columns)):
         raise original_error
+    if member_codes is not None:
+        frame = frame[frame["代码"].astype(str).str[-6:].str.zfill(6).isin(member_codes)]
     frame = frame.copy()
     frame["_rank_value"] = _numeric(frame, "成交量")
     frame = frame[np.isfinite(frame["_rank_value"].to_numpy(dtype=float, na_value=np.nan))]
@@ -316,13 +389,36 @@ def _select_stock_pool_sina(
 
 
 def list_stock_sectors() -> List[str]:
-    """返回 AKShare 东财行业板块名称；网络失败由调用方显示。"""
+    """返回行业板块名称；东财代理/直连均失败时切换 AKShare 同花顺行业表。"""
     import akshare as ak
 
-    frame = ak.stock_board_industry_name_em()
-    if frame is None or "板块名称" not in frame.columns:
-        return []
-    return sorted({str(value).strip() for value in frame["板块名称"].dropna() if str(value).strip()})
+    try:
+        frame = ak.stock_board_industry_name_em()
+        if frame is not None and "板块名称" in frame.columns:
+            sectors = {
+                str(value).strip() for value in frame["板块名称"].dropna()
+                if str(value).strip()
+            }
+            if sectors:
+                return sorted(sectors)
+    except Exception:
+        pass
+    try:
+        sectors = {name for _code, name in _direct_stock_sector_catalog()}
+    except Exception as eastmoney_error:
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                frame = ak.stock_board_industry_summary_ths()
+            column = "板块" if frame is not None and "板块" in frame.columns else None
+            sectors = {
+                str(value).strip() for value in frame[column].dropna()
+                if str(value).strip()
+            } if column else set()
+        except Exception:
+            raise eastmoney_error
+    if not sectors:
+        raise RuntimeError("AKShare 东财、东财直连与同花顺均未返回行业板块")
+    return sorted(sectors)
 
 
 def select_stock_pool(
@@ -346,10 +442,14 @@ def select_stock_pool(
         # 同一网络环境下全市场端点已失败，本批日线直接走有硬超时的腾讯备用源。
         _mark_source_unavailable("eastmoney_daily")
         _mark_source_unavailable("eastmoney_minute")
-        # 新浪快照没有行业字段；限定板块时不能悄悄扩大为全市场。
-        if str(sector or "all").strip().lower() != "all":
-            raise
-        return _select_stock_pool_sina(count, metric, order, log, exc)
+        sector_text = str(sector or "all").strip()
+        member_codes = (
+            _stock_sector_codes(ak, sector_text)
+            if sector_text.lower() != "all" else None
+        )
+        return _select_stock_pool_sina(
+            count, metric, order, log, exc, member_codes=member_codes
+        )
     _clear_source_unavailable("eastmoney_pool")
     required = {"代码", "名称", metric_column}
     if frame is None or not required.issubset(set(frame.columns)):
@@ -362,10 +462,7 @@ def select_stock_pool(
     sector = str(sector or "all").strip()
     if sector.lower() != "all":
         _log(log, f"[AKSHARE][POOL] 请求行业板块成分: {sector}")
-        members = ak.stock_board_industry_cons_em(symbol=sector)
-        if members is None or "代码" not in members.columns:
-            raise RuntimeError(f"行业板块 {sector} 未返回有效成分股")
-        codes = {str(value).strip().zfill(6) for value in members["代码"].dropna()}
+        codes = _stock_sector_codes(ak, sector)
         frame = frame[frame["代码"].astype(str).str.zfill(6).isin(codes)]
 
     frame = frame.copy()

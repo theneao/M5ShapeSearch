@@ -62,6 +62,10 @@
 修改时间：2026-09-30
 修改作用：移除桌面端主工作区的嵌套滚动上下文，左右留白、面板和画板区域均统一驱动页面滚动。
 使用方式：刷新 7860 后，可在页面任意横向位置使用滚轮或触控滑动到底部。
+
+修改时间：2026-09-30
+修改作用：行业板块刷新显示实时、缓存或故障缓存来源；存在历史缓存时不再把上游网络故障显示为加载失败。
+使用方式：点击“从 AKShare 刷新板块列表”，页面会明确提示是否使用最后一次成功缓存。
 """
 from __future__ import annotations
 
@@ -1735,7 +1739,13 @@ def refresh_sectors():
     try:
         data = _request("GET", "/api/v1/market-data/sectors?refresh=true", timeout=30.0)
         items = ["all", *data.get("items", [])]
-        return gr.update(choices=items, value="all"), f"已加载 {len(items) - 1} 个行业板块"
+        source = str(data.get("source", "live"))
+        message = (
+            f"实时源暂不可用，已加载本地缓存的 {len(items) - 1} 个行业板块。"
+            if source == "cache_fallback"
+            else f"已加载 {len(items) - 1} 个行业板块"
+        )
+        return gr.update(choices=items, value="all"), message
     except Exception as exc:
         return gr.update(), f"板块加载失败：{exc}"
 

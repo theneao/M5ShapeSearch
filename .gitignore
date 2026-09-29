@@ -90,6 +90,7 @@ server/tests/layout_ui_review/
 server/tests/premium_ui_review/
 server/tests/strategy_indicator_review/
 server/tests/scroll_ui_review/
+server/tests/sector_fallback_review/
 server/ui_snapshots/
 server/tests/_smoke_real_ui_out.txt
 server/acceptance_report_latest.json

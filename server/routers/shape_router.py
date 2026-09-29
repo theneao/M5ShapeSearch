@@ -40,6 +40,10 @@
 修改时间：2026-09-15
 修改作用：接入 Sequoia-X 预设策略、手绘策略持久化和多策略交集/并集筛选 API。
 使用方式：GET /strategies/catalog；POST /strategies/sketches；POST /strategies/screen。
+
+修改时间：2026-09-30
+修改作用：板块列表 API 返回 live/cache/cache_fallback 来源，实时源故障但存在缓存时不再返回 502。
+使用方式：GET /market-data/sectors?refresh=true 的 data.source 可用于页面显示降级提示。
 """
 from __future__ import annotations
 # 修改时间：2026-08-29
@@ -464,7 +468,13 @@ def api_market_data_sectors(refresh: bool = False):
         sectors = market_data_service.list_sectors(refresh=refresh)
     except Exception as exc:
         raise HTTPException(502, f"AKShare 板块列表获取失败: {exc}") from exc
-    return {"code": 0, "data": {"items": sectors}}
+    return {
+        "code": 0,
+        "data": {
+            "items": sectors,
+            "source": market_data_service.sector_list_source,
+        },
+    }
 
 
 @router.get("/market/kline")
